@@ -1715,6 +1715,19 @@ function MindForgeCore(hook) {
         return new RegExp(`,\\s*["'\u201c\u201d]?\\s*${actor}\\s+(?:says?|asks?|echoes?|replies?|answers?|whispers?|shouts?)\\b`, "i").test(clean);
     };
 
+    const observerVerbPattern = "(?:watch(?:es|ed)?|saw|see(?:s)?|notice(?:s|d)?|observe(?:s|d)?|look(?:s|ed)?\\s+(?:at|into|toward))";
+
+    const normalizePrivateThoughtPerspective = (agentName, value = "", config = {}) => {
+        const playerName = cleanPlayerName(config.player) || String(config.player || "protagonist").trim();
+        if (!playerName) return String(value || "").trim();
+        const playerPattern = escapeRegex(playerName);
+        const thoughtPrefix = "((?:I\\s+(?:need|must)\\s+to\\s+remember\\s+this|I\\s+remember|I\\s+notice|I\\s+need\\s+to\\s+understand[^:]{0,90}|I\\s+feel[^:]{0,90})\\s*:\\s*)?";
+        return String(value || "")
+            .replace(new RegExp(`^${thoughtPrefix}${playerPattern}\\s+${observerVerbPattern}\\s+my\\s+eyes\\b`, "i"), "$1my eyes")
+            .replace(/\s+/g, " ")
+            .trim();
+    };
+
     const isQualityThought = (agentName, key, value, brain, config) => {
         if (!config.qualityGate) return true;
         const cleanKey = cleanComparableKey(key);
@@ -1772,9 +1785,13 @@ function MindForgeCore(hook) {
         const isQuestion = (value = "") => /\?\s*$/.test(String(value || "").trim());
         const cleanEventForThought = (sentence = "") => {
             const agentPattern = escapeRegex(agentName);
+            const observerPattern = `(?:you|${playerNamePattern})\\s+${observerVerbPattern}`;
             let clean = stripPlayerVocative(sentence)
                 .replace(/^["'`]+|["'`]+$/g, "")
                 .replace(new RegExp(`,\\s*["'\u201c\u201d]?\\s*(?:${agentPattern}|she|he|they)\\s+(?:says?|asks?|echoes?|replies?|answers?|whispers?|shouts?)\\b[^.!?]*(?=[.!?]?$)`, "i"), "")
+                .replace(new RegExp(`^${observerPattern}\\s+${agentPattern}'s\\b`, "i"), `${agentName}'s`)
+                .replace(new RegExp(`^${observerPattern}\\s+(?:her|his|their)\\s+eyes\\b`, "i"), "my eyes")
+                .replace(new RegExp(`^${observerPattern}\\s+as\\s+${agentPattern}\\b`, "i"), agentName)
                 .replace(new RegExp(`\\b${agentPattern}'s\\b`, "ig"), "my")
                 .replace(/\b[Yy]our\b/g, `${playerName}'s`)
                 .replace(/\b[Yy]ou\b/g, playerName)
@@ -2814,7 +2831,10 @@ function MindForgeCore(hook) {
             MF.ops++;
 
             if (pendingOp.type === "set") {
-                let setOp = pendingOp;
+                let setOp = {
+                    ...pendingOp,
+                    val: normalizePrivateThoughtPerspective(agentName, pendingOp.val, config)
+                };
                 let commitSet = true;
                 const canFallbackFromRejectedSet = () => (
                     hasNarrative &&
@@ -2829,7 +2849,10 @@ function MindForgeCore(hook) {
                     const fallbackOp = canFallbackFromRejectedSet() ? buildFallbackMemoryOp(agentName, text, config) : null;
                     if (fallbackOp) {
                         fallbackOp.hash = setOp.hash;
-                        setOp = fallbackOp;
+                        setOp = {
+                            ...fallbackOp,
+                            val: normalizePrivateThoughtPerspective(agentName, fallbackOp.val, config)
+                        };
                         if (!isQualityThought(agentName, setOp.key, setOp.val, brain, config)) {
                             bumpHealth("thoughtQualitySkips");
                             bumpHealth("qualitySkips");

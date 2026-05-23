@@ -736,6 +736,49 @@ parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
 }, {});
 const rigidStateKey = Object.keys(parsedClara).find(key => key.startsWith("_state_current("));
 assert(rigidStateKey && parsedClara[rigidStateKey].includes("my body goes rigid"), "Rejected body-action memories should become volatile first-person state.");
+
+// --- Test 25j: Observer wrappers around the active NPC's eyes become private perspective ---
+claraBrainCard.description = "";
+configCard.entry = "MindForge Configuration\n\nEnabled: true\nPlayer Name: Leo\nThought Chance (0-100): 100\nHalf Thought Chance: false\nBootstrap Empty Brains: true";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.agent = "Clara";
+globalThis.history = [{ text: "Leo studies Clara beside the capsule.", type: "story" }];
+globalThis.text = "[+memory_recent: I need to remember this: Leo watch my eyes move from the capsule to Leo's face, then back again.] Clara's gaze flicks from the capsule to Leo's face and back again.";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+assert(
+    parsedClara.memory_recent === "I need to remember this: my eyes move from the capsule to Leo's face, then back again.",
+    "Direct model memories should not keep the player as the watcher of the NPC's own eyes."
+);
+
+claraBrainCard.description = "";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.pendingMemory = { agent: "Clara", hash: "", turn: history.length };
+globalThis.state.MindForge.agent = "Clara";
+globalThis.history = [{ text: "Leo studies Clara beside the capsule.", type: "story" }];
+globalThis.state.MindForge.pendingMemory.hash = (function() {
+    let n = 0;
+    const serialized = JSON.stringify(globalThis.history.slice(-30));
+    for (let i = 0; i < serialized.length; i++) {
+        n = ((31 * n) + serialized.charCodeAt(i)) | 0;
+    }
+    return n.toString(16);
+})();
+globalThis.text = "You watch Clara's eyes move from the capsule to your face, then back again.";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+assert(
+    parsedClara.memory_recent === "I need to remember this: my eyes move from the capsule to Leo's face, then back again.",
+    "Fallback memories should convert second-person observer prose into the active NPC's private perspective."
+);
 configCard.description = "NPC Names (First name followed by comma-separated aliases):\nClara, princess, her highness\nMarcus, captain, Sir Marcus, warrior";
 globalThis.state.MindForge.pendingMemory = { agent: "", hash: "", turn: -999 };
 globalThis.state.MindForge.lastWrite = {};
