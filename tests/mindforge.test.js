@@ -779,6 +779,48 @@ assert(
     parsedClara.memory_recent === "I need to remember this: my eyes move from the capsule to Leo's face, then back again.",
     "Fallback memories should convert second-person observer prose into the active NPC's private perspective."
 );
+
+// --- Test 25k: Third-person active-NPC prose becomes first person in private memory ---
+claraBrainCard.description = "";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.agent = "Clara";
+globalThis.history = [{ text: "Clara finds Leo's paper tag.", type: "story" }];
+globalThis.text = "[+relationship_leo: I need to understand where I stand with Leo: Something left over.\" She takes a single step forward, her gaze fixed on the paper tag with Leo's name on it.] \"Something left over.\" She takes a single step forward, her gaze fixed on the paper tag with Leo's name on it.";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+assert(
+    parsedClara.relationship_leo === "I need to understand where I stand with Leo: Something left over.\" I take a single step forward, my gaze fixed on the paper tag with Leo's name on it.",
+    "Direct model memories should convert third-person active-NPC prose to first person."
+);
+
+claraBrainCard.description = "";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.pendingMemory = { agent: "Clara", hash: "", turn: history.length };
+globalThis.state.MindForge.agent = "Clara";
+globalThis.history = [{ text: "Clara finds Leo's paper tag.", type: "story" }];
+globalThis.state.MindForge.pendingMemory.hash = (function() {
+    let n = 0;
+    const serialized = JSON.stringify(globalThis.history.slice(-30));
+    for (let i = 0; i < serialized.length; i++) {
+        n = ((31 * n) + serialized.charCodeAt(i)) | 0;
+    }
+    return n.toString(16);
+})();
+globalThis.text = "\"Something left over.\" She takes a single step forward, her gaze fixed on the paper tag with Leo's name on it.";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+assert(
+    parsedClara.relationship_leo === "I need to understand where I stand with Leo: Something left over.\" I take a single step forward, my gaze fixed on the paper tag with Leo's name on it.",
+    "Fallback memories should convert third-person active-NPC prose to first person."
+);
 configCard.description = "NPC Names (First name followed by comma-separated aliases):\nClara, princess, her highness\nMarcus, captain, Sir Marcus, warrior";
 globalThis.state.MindForge.pendingMemory = { agent: "", hash: "", turn: -999 };
 globalThis.state.MindForge.lastWrite = {};

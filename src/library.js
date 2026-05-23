@@ -1716,6 +1716,27 @@ function MindForgeCore(hook) {
     };
 
     const observerVerbPattern = "(?:watch(?:es|ed)?|saw|see(?:s)?|notice(?:s|d)?|observe(?:s|d)?|look(?:s|ed)?\\s+(?:at|into|toward))";
+    const privateBodyNounPattern = "(?:arms?|body|breath|chest|eyes?|face|fingers?|gaze|hands?|head|heart|jaw|lips|mouth|posture|pulse|shoulders?|stance|step|throat|voice)";
+
+    const toFirstPersonVerb = (verb = "") => {
+        const lower = String(verb || "").toLowerCase();
+        const irregular = {
+            am: "am",
+            are: "am",
+            does: "do",
+            goes: "go",
+            has: "have",
+            is: "am",
+            says: "say",
+            was: "was",
+            were: "was"
+        };
+        if (irregular[lower]) return irregular[lower];
+        if (lower.endsWith("ies") && lower.length > 4) return `${lower.slice(0, -3)}y`;
+        if (lower.endsWith("ches") || lower.endsWith("shes") || lower.endsWith("sses") || lower.endsWith("xes") || lower.endsWith("zes")) return lower.slice(0, -2);
+        if (lower.endsWith("s") && lower.length > 3) return lower.slice(0, -1);
+        return lower;
+    };
 
     const normalizePrivateThoughtPerspective = (agentName, value = "", config = {}) => {
         const playerName = cleanPlayerName(config.player) || String(config.player || "protagonist").trim();
@@ -1724,6 +1745,10 @@ function MindForgeCore(hook) {
         const thoughtPrefix = "((?:I\\s+(?:need|must)\\s+to\\s+remember\\s+this|I\\s+remember|I\\s+notice|I\\s+need\\s+to\\s+understand[^:]{0,90}|I\\s+feel[^:]{0,90})\\s*:\\s*)?";
         return String(value || "")
             .replace(new RegExp(`^${thoughtPrefix}${playerPattern}\\s+${observerVerbPattern}\\s+my\\s+eyes\\b`, "i"), "$1my eyes")
+            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)(?:she|he|they)\\s+goes\\s+rigid\\b`, "ig"), "$1my body goes rigid")
+            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)(?:she|he|they)\\s+([A-Za-z]+)\\b`, "ig"), (match, prefix, verb) => `${prefix}I ${toFirstPersonVerb(verb)}`)
+            .replace(new RegExp(`\\b(?:her|his|their)\\s+(${privateBodyNounPattern})\\b`, "ig"), "my $1")
+            .replace(/\b(?:herself|himself|themselves)\b/ig, "myself")
             .replace(/\s+/g, " ")
             .trim();
     };
@@ -1798,6 +1823,7 @@ function MindForgeCore(hook) {
                 .replace(new RegExp(`^${agentPattern}\\s+goes\\s+rigid\\b`, "i"), "my body goes rigid")
                 .replace(/\s+/g, " ")
                 .trim();
+            clean = normalizePrivateThoughtPerspective(agentName, clean, config);
             clean = clean.replace(new RegExp(`^${escapeRegex(playerName)}\\s+love\\s+me\\b`, "i"), `${playerName} says ${playerName} loves me`);
             return clean;
         };
