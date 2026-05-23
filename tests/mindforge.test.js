@@ -678,6 +678,64 @@ parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
 }, {});
 const stateKey = Object.keys(parsedClara).find(key => key.startsWith("_state_current("));
 assert(stateKey && parsedClara[stateKey].startsWith("I feel "), "Fallback emotional state should be volatile and first-person.");
+
+// --- Test 25h: Bad model-authored observation memories fall back to private thoughts ---
+const fallbackWritesBefore25h = globalThis.state.MindForge.health.fallbackMemoryWrites || 0;
+const thoughtQualitySkipsBefore25h = globalThis.state.MindForge.health.thoughtQualitySkips || 0;
+claraBrainCard.description = "memory_recent: Clara watches Leo near the capsule.";
+configCard.entry = "MindForge Configuration\n\nEnabled: true\nPlayer Name: Leo\nThought Chance (0-100): 100\nHalf Thought Chance: false\nBootstrap Empty Brains: true";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.pendingMemory = { agent: "Clara", hash: "", turn: history.length };
+globalThis.state.MindForge.agent = "Clara";
+globalThis.history = [{ text: "Clara asks Leo for one truth.", type: "story" }];
+globalThis.state.MindForge.pendingMemory.hash = (function() {
+    let n = 0;
+    const serialized = JSON.stringify(globalThis.history.slice(-30));
+    for (let i = 0; i < serialized.length; i++) {
+        n = ((31 * n) + serialized.charCodeAt(i)) | 0;
+    }
+    return n.toString(16);
+})();
+globalThis.text = "[+relationship_leo: Clara observes: Leo love me,\" she echoes, her voice flat.;] \"You love me,\" she echoes, her voice flat.";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+assert(
+    parsedClara.relationship_leo &&
+    parsedClara.relationship_leo.startsWith("I need to understand where I stand with Leo") &&
+    !parsedClara.relationship_leo.includes("Clara observes") &&
+    !parsedClara.relationship_leo.includes("she echoes"),
+    "Rejected model observation memories should be replaced by private fallback relationship thoughts."
+);
+assert((globalThis.state.MindForge.health.thoughtQualitySkips || 0) > thoughtQualitySkipsBefore25h, "Rejected model observation memories should be counted by the quality gate.");
+assert((globalThis.state.MindForge.health.fallbackMemoryWrites || 0) > fallbackWritesBefore25h, "Rejected model observation memories should still produce fallback writes.");
+
+// --- Test 25i: Bad model-authored body-action memories fall back to volatile state ---
+claraBrainCard.description = "memory_recent: Clara watches Leo near the capsule.";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.pendingMemory = { agent: "Clara", hash: "", turn: history.length };
+globalThis.state.MindForge.agent = "Clara";
+globalThis.history = [{ text: "Leo kisses Clara beside the capsule.", type: "story" }];
+globalThis.state.MindForge.pendingMemory.hash = (function() {
+    let n = 0;
+    const serialized = JSON.stringify(globalThis.history.slice(-30));
+    for (let i = 0; i < serialized.length; i++) {
+        n = ((31 * n) + serialized.charCodeAt(i)) | 0;
+    }
+    return n.toString(16);
+})();
+globalThis.text = "[+memory_recent: Clara goes rigid in Leo's arms.] Clara goes rigid in Leo's arms.";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+const rigidStateKey = Object.keys(parsedClara).find(key => key.startsWith("_state_current("));
+assert(rigidStateKey && parsedClara[rigidStateKey].includes("my body goes rigid"), "Rejected body-action memories should become volatile first-person state.");
 configCard.description = "NPC Names (First name followed by comma-separated aliases):\nClara, princess, her highness\nMarcus, captain, Sir Marcus, warrior";
 globalThis.state.MindForge.pendingMemory = { agent: "", hash: "", turn: -999 };
 globalThis.state.MindForge.lastWrite = {};

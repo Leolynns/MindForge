@@ -1705,6 +1705,16 @@ function MindForgeCore(hook) {
         return { text: kept.join("\n").trim(), removed };
     };
 
+    const isNarrativeMemoryLeak = (agentName, value = "") => {
+        const clean = String(value || "").replace(/\s+/g, " ").trim();
+        if (!clean) return false;
+        const agent = sanitizeAgentName(agentName);
+        const actor = agent ? `(?:${escapeRegex(agent)}|she|he|they)` : "(?:she|he|they)";
+        if (agent && new RegExp(`^${escapeRegex(agent)}\\s+observes\\s*:`, "i").test(clean)) return true;
+        if (agent && new RegExp(`^${escapeRegex(agent)}\\s+goes\\s+rigid\\b`, "i").test(clean)) return true;
+        return new RegExp(`,\\s*["'\u201c\u201d]?\\s*${actor}\\s+(?:says?|asks?|echoes?|replies?|answers?|whispers?|shouts?)\\b`, "i").test(clean);
+    };
+
     const isQualityThought = (agentName, key, value, brain, config) => {
         if (!config.qualityGate) return true;
         const cleanKey = cleanComparableKey(key);
@@ -1716,6 +1726,7 @@ function MindForgeCore(hook) {
         if (/\b(?:cannot|can't)\s+comply\b/i.test(val)) return false;
         if (/(?:strict output|output format|bracket operation|story continues|mindforge npc|system instruction)/i.test(val)) return false;
         if (/\byou\s+(?:feel|decide|choose|think|want|will|must|remember)\b/i.test(val)) return false;
+        if (!isCoreKey(key) && isNarrativeMemoryLeak(agentName, val)) return false;
         const agentLower = String(agentName || "").toLowerCase();
         const playerLower = String(config.player || "protagonist").toLowerCase();
         if (agentLower && lower.includes(`you are ${agentLower}`)) return false;
@@ -1747,9 +1758,9 @@ function MindForgeCore(hook) {
             .replace(new RegExp(`\\s*[,;:!?-]+\\s*${playerNamePattern}\\s*([.!?])?$`, "i"), "$1")
             .replace(/\s+([.!?])/g, "$1")
             .trim();
-        const strongRelationshipPattern = /\b(?:love|loved|divorce|wife|husband|marriage|cheat|cheating|trust|distrust|betray|betrayal|sorry|forgive|promise|leave|left|vanish|disappear|lie|lied|lying)\b|why now|after all this time/i;
+        const strongRelationshipPattern = /\b(?:love|loves|loved|divorce|wife|husband|marriage|cheat|cheating|trust|trusts|distrust|distrusts|betray|betrays|betrayal|sorry|forgive|forgives|promise|promises|leave|leaves|left|vanish|vanishes|disappear|disappears|lie|lies|lied|lying)\b|why now|after all this time/i;
         const contextualRelationshipPattern = /\b(?:truth|evidence|secret|hidden|hide|hiding|bury|buried|memory|vault)\b|locked away/i;
-        const statePattern = /\b(?:tense|guarded|tighten|tightens|tightened|stiff|cold|flat|quiet|firm|tired|worn|afraid|fear|angry|anger|hurt|tear|cry|shaken|uneasy|nervous|worried|suspicious|doubt|confused|hesitates?|pulls back|doesn'?t soften|searching)\b/i;
+        const statePattern = /\b(?:tense|guarded|rigid|tighten|tightens|tightened|stiff|cold|flat|quiet|firm|tired|worn|afraid|fear|angry|anger|hurt|tear|cry|shaken|uneasy|nervous|worried|suspicious|doubt|confused|hesitates?|pulls back|doesn'?t soften|searching)\b/i;
         const hasPlayerCue = (value = "") => {
             const lower = String(value || "").toLowerCase();
             return lower.includes(playerLower) || /\b(?:you|your)\b/i.test(value);
@@ -1759,13 +1770,20 @@ function MindForgeCore(hook) {
             (contextualRelationshipPattern.test(value) && hasPlayerCue(value))
         );
         const isQuestion = (value = "") => /\?\s*$/.test(String(value || "").trim());
-        const cleanEventForThought = (sentence = "") => stripPlayerVocative(sentence)
-            .replace(/^["'`]+|["'`]+$/g, "")
-            .replace(new RegExp(`\\b${escapeRegex(agentName)}'s\\b`, "ig"), "my")
-            .replace(/\b[Yy]our\b/g, `${playerName}'s`)
-            .replace(/\b[Yy]ou\b/g, playerName)
-            .replace(/\s+/g, " ")
-            .trim();
+        const cleanEventForThought = (sentence = "") => {
+            const agentPattern = escapeRegex(agentName);
+            let clean = stripPlayerVocative(sentence)
+                .replace(/^["'`]+|["'`]+$/g, "")
+                .replace(new RegExp(`,\\s*["'\u201c\u201d]?\\s*(?:${agentPattern}|she|he|they)\\s+(?:says?|asks?|echoes?|replies?|answers?|whispers?|shouts?)\\b[^.!?]*(?=[.!?]?$)`, "i"), "")
+                .replace(new RegExp(`\\b${agentPattern}'s\\b`, "ig"), "my")
+                .replace(/\b[Yy]our\b/g, `${playerName}'s`)
+                .replace(/\b[Yy]ou\b/g, playerName)
+                .replace(new RegExp(`^${agentPattern}\\s+goes\\s+rigid\\b`, "i"), "my body goes rigid")
+                .replace(/\s+/g, " ")
+                .trim();
+            clean = clean.replace(new RegExp(`^${escapeRegex(playerName)}\\s+love\\s+me\\b`, "i"), `${playerName} says ${playerName} loves me`);
+            return clean;
+        };
         const inferState = (event = "") => {
             const lower = String(event || "").toLowerCase();
             if (/\b(?:afraid|fear|nervous|worried)\b/.test(lower)) return "afraid";
@@ -1774,7 +1792,7 @@ function MindForgeCore(hook) {
             if (/\b(?:tired|worn)\b/.test(lower)) return "tired";
             if (/\b(?:suspicious|doubt|lie|lied|hidden|secret|evidence|bury|buried)\b/.test(lower)) return "suspicious";
             if (/\b(?:confused|why|searching)\b/.test(lower)) return "uncertain";
-            if (/\b(?:guarded|cold|flat|firm)\b/.test(lower)) return "guarded";
+            if (/\b(?:guarded|rigid|cold|flat|firm)\b/.test(lower)) return "guarded";
             return "tense";
         };
         const ensureSentenceEnd = (value = "") => /[.!?]$/.test(value.trim()) ? value.trim() : `${value.trim()}.`;
@@ -2796,24 +2814,51 @@ function MindForgeCore(hook) {
             MF.ops++;
 
             if (pendingOp.type === "set") {
-                if (!isQualityThought(agentName, pendingOp.key, pendingOp.val, brain, config)) {
+                let setOp = pendingOp;
+                let commitSet = true;
+                const canFallbackFromRejectedSet = () => (
+                    hasNarrative &&
+                    !setOp.fallback &&
+                    MF.pendingMemory &&
+                    MF.pendingMemory.agent === agentName &&
+                    MF.pendingMemory.hash === currentHash
+                );
+                if (!isQualityThought(agentName, setOp.key, setOp.val, brain, config)) {
                     bumpHealth("thoughtQualitySkips");
                     bumpHealth("qualitySkips");
-                    MF.ops--;
-                } else if (isDuplicateThought(brain, pendingOp.key, pendingOp.val)) {
+                    const fallbackOp = canFallbackFromRejectedSet() ? buildFallbackMemoryOp(agentName, text, config) : null;
+                    if (fallbackOp) {
+                        fallbackOp.hash = setOp.hash;
+                        setOp = fallbackOp;
+                        if (!isQualityThought(agentName, setOp.key, setOp.val, brain, config)) {
+                            bumpHealth("thoughtQualitySkips");
+                            bumpHealth("qualitySkips");
+                            commitSet = false;
+                        } else if (isDuplicateThought(brain, setOp.key, setOp.val)) {
+                            bumpHealth("duplicateSkips");
+                            commitSet = false;
+                        }
+                    } else {
+                        commitSet = false;
+                    }
+                } else if (isDuplicateThought(brain, setOp.key, setOp.val)) {
                     bumpHealth("duplicateSkips");
+                    commitSet = false;
+                }
+
+                if (!commitSet) {
                     MF.ops--;
                 } else {
-                    removeFromBrain(brain, pendingOp.key, { allowCore: true });
-                    removeLabelsForKey(agentName, pendingOp.key);
-                    brain[pendingOp.key] = pendingOp.val;
-                    touchMemory(agentName, pendingOp.key, "write");
-                    const label = ensureThoughtLabel(agentName, pendingOp.key);
+                    removeFromBrain(brain, setOp.key, { allowCore: true });
+                    removeLabelsForKey(agentName, setOp.key);
+                    brain[setOp.key] = setOp.val;
+                    touchMemory(agentName, setOp.key, "write");
+                    const label = ensureThoughtLabel(agentName, setOp.key);
                     if (hasNarrative) {
-                        prefixText = config.zwspLabels ? encodeLabel(label) : `<!--mf:${pendingOp.tagKey}-->`;
+                        prefixText = config.zwspLabels ? encodeLabel(label) : `<!--mf:${setOp.tagKey}-->`;
                     }
-                    logMsg = `// operation ${MF.ops}\n${agentName.toLowerCase()}.${pendingOp.key} = ${JSON.stringify(pendingOp.val)};`;
-                    if (pendingOp.fallback) {
+                    logMsg = `// operation ${MF.ops}\n${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(setOp.val)};`;
+                    if (setOp.fallback) {
                         bumpHealth("fallbackMemoryWrites");
                     }
                 }
