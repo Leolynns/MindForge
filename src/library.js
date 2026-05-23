@@ -1740,6 +1740,12 @@ function MindForgeCore(hook) {
         const pool = sentences.length ? sentences : [source.slice(0, 220)];
         const agentLower = String(agentName || "").toLowerCase();
         const playerLower = playerName.toLowerCase();
+        const playerNamePattern = escapeRegex(playerName);
+        const stripPlayerVocative = (sentence = "") => String(sentence || "")
+            .replace(new RegExp(`^${playerNamePattern}\\s*[,;:!?-]+\\s*`, "i"), "")
+            .replace(new RegExp(`\\s*[,;:!?-]+\\s*${playerNamePattern}\\s*([.!?])?$`, "i"), "$1")
+            .replace(/\s+([.!?])/g, "$1")
+            .trim();
         const relationshipPattern = /\b(?:love|loved|divorce|wife|husband|marriage|cheat|cheating|trust|betray|sorry|hug|kiss|anger|angry|afraid|fear|tear|cry|forgive|promise|leave|left|vanish|disappear)\b|why now|after all this time/i;
 
         const scored = pool.map((sentence, order) => {
@@ -1753,7 +1759,7 @@ function MindForgeCore(hook) {
             return { sentence, order, score };
         }).sort((a, b) => (b.score - a.score) || (a.order - b.order));
 
-        let value = (scored[0] ? scored[0].sentence : source.slice(0, 220))
+        let value = stripPlayerVocative(scored[0] ? scored[0].sentence : source.slice(0, 220))
             .replace(/\b[Yy]our\b/g, `${playerName}'s`)
             .replace(/\b[Yy]ou\b/g, playerName)
             .replace(/\s+/g, " ")

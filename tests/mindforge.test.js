@@ -621,6 +621,30 @@ parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
     return acc;
 }, {});
 assert(parsedClara.relationship_leo && parsedClara.relationship_leo.includes("Why now"), "Sparse-brain fallback should add relationship memory from later normal prose.");
+
+// --- Test 25f: Fallback memories remove repeated direct-address player names ---
+claraBrainCard.description = "memory_recent: Clara watches Leo near the capsule.";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.lastWrite = {};
+globalThis.state.MindForge.pendingMemory = { agent: "Clara", hash: "", turn: history.length };
+globalThis.state.MindForge.agent = "Clara";
+globalThis.history = [{ text: "Clara asks Leo about the capsule.", type: "story" }];
+globalThis.state.MindForge.pendingMemory.hash = (function() {
+    let n = 0;
+    const serialized = JSON.stringify(globalThis.history.slice(-30));
+    for (let i = 0; i < serialized.length; i++) {
+        n = ((31 * n) + serialized.charCodeAt(i)) | 0;
+    }
+    return n.toString(16);
+})();
+globalThis.text = "\"What did you bury, Leo?\"";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+assert(parsedClara.memory_recent === "Clara observes: What did Leo bury?", "Fallback memories should not repeat the player name as both subject and direct address.");
 configCard.description = "NPC Names (First name followed by comma-separated aliases):\nClara, princess, her highness\nMarcus, captain, Sir Marcus, warrior";
 globalThis.state.MindForge.pendingMemory = { agent: "", hash: "", turn: -999 };
 globalThis.state.MindForge.lastWrite = {};
