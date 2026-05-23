@@ -1525,7 +1525,8 @@ function MindForgeCore(hook) {
     const getSlotGuidance = (agentName, config) => {
         if (!config.memorySlots) return "";
         return [
-            `Prefer useful slots when relevant: relationship_${formatMemoryKey(config.player || "player")}, goal_current, plan_next, secret_hidden, state_current.`,
+            `Prefer useful durable slots when relevant: relationship_${formatMemoryKey(config.player || "player")}, goal_current, plan_next, secret_hidden.`,
+            `Use _state_current for temporary emotion or posture; it decays automatically.`,
             `Use core_* only for durable identity facts about ${agentName}; never use core_* for temporary observations.`
         ].join("\n");
     };
@@ -1746,7 +1747,60 @@ function MindForgeCore(hook) {
             .replace(new RegExp(`\\s*[,;:!?-]+\\s*${playerNamePattern}\\s*([.!?])?$`, "i"), "$1")
             .replace(/\s+([.!?])/g, "$1")
             .trim();
-        const relationshipPattern = /\b(?:love|loved|divorce|wife|husband|marriage|cheat|cheating|trust|betray|sorry|hug|kiss|anger|angry|afraid|fear|tear|cry|forgive|promise|leave|left|vanish|disappear)\b|why now|after all this time/i;
+        const strongRelationshipPattern = /\b(?:love|loved|divorce|wife|husband|marriage|cheat|cheating|trust|distrust|betray|betrayal|sorry|forgive|promise|leave|left|vanish|disappear|lie|lied|lying)\b|why now|after all this time/i;
+        const contextualRelationshipPattern = /\b(?:truth|evidence|secret|hidden|hide|hiding|bury|buried|memory|vault)\b|locked away/i;
+        const statePattern = /\b(?:tense|guarded|tighten|tightens|tightened|stiff|cold|flat|quiet|firm|tired|worn|afraid|fear|angry|anger|hurt|tear|cry|shaken|uneasy|nervous|worried|suspicious|doubt|confused|hesitates?|pulls back|doesn'?t soften|searching)\b/i;
+        const hasPlayerCue = (value = "") => {
+            const lower = String(value || "").toLowerCase();
+            return lower.includes(playerLower) || /\b(?:you|your)\b/i.test(value);
+        };
+        const isRelationshipEvent = (value = "") => (
+            strongRelationshipPattern.test(value) ||
+            (contextualRelationshipPattern.test(value) && hasPlayerCue(value))
+        );
+        const isQuestion = (value = "") => /\?\s*$/.test(String(value || "").trim());
+        const cleanEventForThought = (sentence = "") => stripPlayerVocative(sentence)
+            .replace(/^["'`]+|["'`]+$/g, "")
+            .replace(new RegExp(`\\b${escapeRegex(agentName)}'s\\b`, "ig"), "my")
+            .replace(/\b[Yy]our\b/g, `${playerName}'s`)
+            .replace(/\b[Yy]ou\b/g, playerName)
+            .replace(/\s+/g, " ")
+            .trim();
+        const inferState = (event = "") => {
+            const lower = String(event || "").toLowerCase();
+            if (/\b(?:afraid|fear|nervous|worried)\b/.test(lower)) return "afraid";
+            if (/\b(?:angry|anger)\b/.test(lower)) return "angry";
+            if (/\b(?:hurt|tear|cry)\b/.test(lower)) return "hurt";
+            if (/\b(?:tired|worn)\b/.test(lower)) return "tired";
+            if (/\b(?:suspicious|doubt|lie|lied|hidden|secret|evidence|bury|buried)\b/.test(lower)) return "suspicious";
+            if (/\b(?:confused|why|searching)\b/.test(lower)) return "uncertain";
+            if (/\b(?:guarded|cold|flat|firm)\b/.test(lower)) return "guarded";
+            return "tense";
+        };
+        const ensureSentenceEnd = (value = "") => /[.!?]$/.test(value.trim()) ? value.trim() : `${value.trim()}.`;
+        const trimThought = (value = "", limit = 240) => {
+            const clean = ensureSentenceEnd(String(value || "").replace(/\s+/g, " ").trim());
+            return clean.length <= limit ? clean : ensureSentenceEnd(clean.slice(0, limit - 1).trim());
+        };
+        const buildThoughtValue = (key, event) => {
+            const cleanEvent = ensureSentenceEnd(event || "something important changed");
+            if (cleanComparableKey(key).startsWith("relationship_")) {
+                if (isQuestion(cleanEvent)) {
+                    return trimThought(`I need the truth from ${playerName}: ${cleanEvent}`);
+                }
+                if (/\b(?:divorce|wife|husband|marriage|cheat|cheating|betray|betrayal)\b/i.test(cleanEvent)) {
+                    return trimThought(`I can no longer separate ${playerName} from what still stands between us: ${cleanEvent}`);
+                }
+                return trimThought(`I need to understand where I stand with ${playerName}: ${cleanEvent}`);
+            }
+            if (cleanComparableKey(key) === "state_current") {
+                return trimThought(`I feel ${inferState(cleanEvent)} as this unfolds: ${cleanEvent}`);
+            }
+            if (isQuestion(cleanEvent)) {
+                return trimThought(`I need an answer to this question: ${cleanEvent}`);
+            }
+            return trimThought(`I need to remember this: ${cleanEvent}`);
+        };
 
         const scored = pool.map((sentence, order) => {
             const lower = sentence.toLowerCase();
@@ -1754,25 +1808,20 @@ function MindForgeCore(hook) {
             if (agentLower && lower.includes(agentLower)) score += 60;
             if (playerLower && lower.includes(playerLower)) score += 35;
             if (/\b(?:she|he|they)\b/i.test(sentence)) score += 12;
-            if (relationshipPattern.test(sentence)) score += 30;
+            if (isRelationshipEvent(sentence)) score += 75;
+            if (statePattern.test(sentence)) score += 35;
             if (/["“”]/.test(sentence)) score += 5;
             return { sentence, order, score };
         }).sort((a, b) => (b.score - a.score) || (a.order - b.order));
 
-        let value = stripPlayerVocative(scored[0] ? scored[0].sentence : source.slice(0, 220))
-            .replace(/\b[Yy]our\b/g, `${playerName}'s`)
-            .replace(/\b[Yy]ou\b/g, playerName)
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 220);
-        if (!value) return null;
-        if (agentLower && !value.toLowerCase().includes(agentLower)) {
-            value = `${agentName} observes: ${value}`.slice(0, 240);
-        }
-
-        const key = relationshipPattern.test(value)
+        const event = cleanEventForThought(scored[0] ? scored[0].sentence : source.slice(0, 220));
+        if (!event) return null;
+        const key = isRelationshipEvent(event)
             ? `relationship_${formatMemoryKey(playerName)}`
+            : statePattern.test(event)
+            ? `_state_current(${config.decay || 3})`
             : "memory_recent";
+        const value = buildThoughtValue(key, event);
         return { type: "set", key, val: value, tagKey: cleanKeyForLLM(key), fallback: true };
     };
 

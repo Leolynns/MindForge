@@ -593,7 +593,12 @@ parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
     if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
     return acc;
 }, {});
-assert(parsedClara.relationship_leo && parsedClara.relationship_leo.includes("Clara"), "Ignored memory prompts should still create a fallback NPC brain note.");
+assert(
+    parsedClara.relationship_leo &&
+    parsedClara.relationship_leo.includes("I can no longer separate Leo") &&
+    parsedClara.relationship_leo.includes("divorce"),
+    "Ignored memory prompts should still create a first-person fallback relationship note."
+);
 assert(globalThis.text.includes("Clara's jaw tightens"), "Fallback memory writes should preserve normal visible story output.");
 assert((globalThis.state.MindForge.health.fallbackMemoryWrites || 0) > 0, "Fallback memory writes should be counted silently.");
 
@@ -644,7 +649,35 @@ parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
     if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
     return acc;
 }, {});
-assert(parsedClara.memory_recent === "Clara observes: What did Leo bury?", "Fallback memories should not repeat the player name as both subject and direct address.");
+assert(
+    parsedClara.relationship_leo === "I need the truth from Leo: What did Leo bury?",
+    "Fallback relationship thoughts should not repeat the player name as both subject and direct address."
+);
+
+// --- Test 25g: Fallback emotional state uses volatile first-person state ---
+claraBrainCard.description = "memory_recent: Clara watches Leo near the capsule.";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.lastWrite = {};
+globalThis.state.MindForge.pendingMemory = { agent: "Clara", hash: "", turn: history.length };
+globalThis.state.MindForge.agent = "Clara";
+globalThis.history = [{ text: "Clara studies the capsule in silence.", type: "story" }];
+globalThis.state.MindForge.pendingMemory.hash = (function() {
+    let n = 0;
+    const serialized = JSON.stringify(globalThis.history.slice(-30));
+    for (let i = 0; i < serialized.length; i++) {
+        n = ((31 * n) + serialized.charCodeAt(i)) | 0;
+    }
+    return n.toString(16);
+})();
+globalThis.text = "Clara's jaw tightens in the cold room.";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+const stateKey = Object.keys(parsedClara).find(key => key.startsWith("_state_current("));
+assert(stateKey && parsedClara[stateKey].startsWith("I feel "), "Fallback emotional state should be volatile and first-person.");
 configCard.description = "NPC Names (First name followed by comma-separated aliases):\nClara, princess, her highness\nMarcus, captain, Sir Marcus, warrior";
 globalThis.state.MindForge.pendingMemory = { agent: "", hash: "", turn: -999 };
 globalThis.state.MindForge.lastWrite = {};
