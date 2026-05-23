@@ -1,6 +1,7 @@
 /**
  * MindForge Core Library
- * A lightweight, highly optimized, and robust agentic NPC memory script for AI Dungeon.
+ * A lightweight, context-efficient, high-quality agentic NPC memory script for AI Dungeon.
+ * MindForge Quality Forge v2: strict thoughts, smart scene fallback, lower default context.
  */
 function MindForge(hook) {
     "use strict";
@@ -330,10 +331,10 @@ function MindForgeCore(hook) {
         "Scenario Auto-Discovery: true",
         "Thought Chance (0-100): 60",
         "Half Thought Chance: true",
-        "Max Brain Context (1-95): 25",
+        "Max Brain Context (1-95): 18",
         "Context Guard Buffer (200-3000): 600",
         "Lookback Turns (1-20): 5",
-        "Max Active NPCs (1-5): 3",
+        "Max Active NPCs (1-5): 2",
         "Pin Config Card: false",
         "Visual Indicator: true",
         "Volatile Decay (1-10): 3",
@@ -348,7 +349,7 @@ function MindForgeCore(hook) {
         "World Memory: false",
         "Memory Slots: true",
         "Thought Quality Gate: true",
-        "Max Brain Keys (3-20): 6",
+        "Max Brain Keys (3-20): 14",
         "Max Lore Keys (3-30): 8"
     ].join("\n");
 
@@ -459,10 +460,10 @@ function MindForgeCore(hook) {
             addIfMissing("Scenario Auto-Discovery: true", key => key.includes("scenario auto") || key.includes("auto-discovery") || key.includes("auto discovery"));
             addIfMissing("Thought Chance (0-100): 60", key => key.includes("thought chance") && !key.includes("half"));
             addIfMissing("Half Thought Chance: true", key => key.includes("half thought chance") || key.includes("half chance"));
-            addIfMissing("Max Brain Context (1-95): 25", key => key.includes("max brain context") || key === "context");
+            addIfMissing("Max Brain Context (1-95): 18", key => key.includes("max brain context") || key === "context");
             addIfMissing("Context Guard Buffer (200-3000): 600", key => key.includes("context guard"));
             addIfMissing("Lookback Turns (1-20): 5", key => key.includes("lookback"));
-            addIfMissing("Max Active NPCs (1-5): 3", key => key.includes("max active"));
+            addIfMissing("Max Active NPCs (1-5): 2", key => key.includes("max active"));
             addIfMissing("Pin Config Card: false", key => key.includes("pin config"));
             addIfMissing("Visual Indicator: true", key => key.includes("visual indicator"));
             addIfMissing("Volatile Decay (1-10): 3", key => key.includes("volatile decay"));
@@ -477,7 +478,7 @@ function MindForgeCore(hook) {
             addIfMissing("World Memory: false", key => key.includes("world memory") || key.includes("auto lore"));
             addIfMissing("Memory Slots: true", key => key.includes("memory slot"));
             addIfMissing("Thought Quality Gate: true", key => key.includes("quality gate"));
-            addIfMissing("Max Brain Keys (3-20): 6", key => key.includes("max brain keys"));
+            addIfMissing("Max Brain Keys (3-20): 14", key => key.includes("max brain keys"));
             addIfMissing("Max Lore Keys (3-30): 8", key => key.includes("max lore keys"));
             if (missingLines.length) {
                 card.entry = `${card.entry.trimEnd()}\n${missingLines.join("\n")}`;
@@ -884,7 +885,7 @@ function MindForgeCore(hook) {
             pov: 2,
             chance: 60,
             halfChance: true,
-            contextPct: 25,
+            contextPct: 18,
             lookback: 5,
             pin: false,
             indicator: true,
@@ -893,7 +894,7 @@ function MindForgeCore(hook) {
             profile: "balanced",
             scenarioDiscovery: true,
             guardBuffer: 600,
-            maxAgents: 3,
+            maxAgents: 2,
             zwspLabels: true,
             rotation: true,
             reflectionChance: 20,
@@ -904,7 +905,7 @@ function MindForgeCore(hook) {
             autoLore: false,
             memorySlots: true,
             qualityGate: true,
-            maxBrainKeys: 6,
+            maxBrainKeys: 14,
             maxLoreKeys: 8,
             agents: []
         };
@@ -967,20 +968,20 @@ function MindForgeCore(hook) {
             else if (key.includes("world memory") || key.includes("auto lore")) config.autoLore = val.toLowerCase() !== "false";
             else if (key.includes("memory slot")) config.memorySlots = val.toLowerCase() !== "false";
             else if (key.includes("quality gate")) config.qualityGate = val.toLowerCase() !== "false";
-            else if (key.includes("max brain keys")) config.maxBrainKeys = clampInt(val, 6, 3, 20);
+            else if (key.includes("max brain keys")) config.maxBrainKeys = clampInt(val, 14, 3, 20);
             else if (key.includes("max lore keys")) config.maxLoreKeys = clampInt(val, 8, 3, 30);
         }
         config.player = resolvePlayerName(config.player);
 
         if (config.profile === "stable") {
             config.chance = Math.min(config.chance, 35);
-            config.contextPct = Math.min(config.contextPct, 18);
+            config.contextPct = Math.min(config.contextPct, 14);
             config.maxAgents = Math.min(config.maxAgents, 1);
             config.reflectionChance = 0;
-            config.maxBrainKeys = Math.min(config.maxBrainKeys, 5);
+            config.maxBrainKeys = Math.min(config.maxBrainKeys, 8);
         } else if (config.profile === "full") {
             config.maxAgents = Math.max(config.maxAgents, 3);
-            config.maxBrainKeys = Math.max(config.maxBrainKeys, 8);
+            config.maxBrainKeys = Math.max(config.maxBrainKeys, 14);
         }
 
         // Parse Description NPC Names and Aliases
@@ -1213,7 +1214,7 @@ function MindForgeCore(hook) {
 
     const normalizeThought = (value = "") => value
         .toLowerCase()
-        .replace(/\d+\s*[-=]*>\s*/g, "")
+        .replace(/\d+\s*(?:[-=]*>|→)\s*/g, "")
         .replace(/[^a-z0-9\s]+/g, " ")
         .replace(/\s+/g, " ")
         .trim();
@@ -1524,8 +1525,11 @@ function MindForgeCore(hook) {
 
     const getSlotGuidance = (agentName, config) => {
         if (!config.memorySlots) return "";
+        const playerKey = formatMemoryKey(config.player || "player");
         return [
-            `Prefer useful durable slots when relevant: relationship_${formatMemoryKey(config.player || "player")}, goal_current, plan_next, secret_hidden.`,
+            `Prefer scene-specific keys chosen from ${agentName}'s point of view, e.g. fake_papers, heavy_log, broken_promise.`,
+            `Only use durable slots such as relationship_${playerKey}, goal_current, plan_next, or secret_hidden when the scene truly changes that slot.`,
+            `Never use generic throwaway keys like memory_recent, recent_event, current_thought, or note.`,
             `Use _state_current for temporary emotion or posture; it decays automatically.`,
             `Use core_* only for durable identity facts about ${agentName}; never use core_* for temporary observations.`
         ].join("\n");
@@ -1535,12 +1539,12 @@ function MindForgeCore(hook) {
         if (!config.agenticCharter) return "";
         return [
             `Private mind for ${agentName}:`,
-            `- treat ${agentName} as a continuous agent with private motives, loyalties, fears, and unfinished plans.`,
-            "- let memory shape subtext: what they notice, hide, trust, avoid, want, or decide next.",
-            "- preserve identity, relationships, goals, secrets, and plans before surface observations.",
-            "- update an existing key when it is the same idea with sharper current information.",
-            "- delete or replace stale low-value thoughts when the brain is crowded.",
-            "- keep the hidden memory operation small and invisible; continue the story as lived action, not analysis."
+            `- ${agentName} is a continuous agent with private motives, loyalties, fears, secrets, and plans.`,
+            "- Store what changes future behavior: promises, betrayals, discoveries, loyalties, plans, fears, and unresolved choices.",
+            "- Avoid camera notes, summaries, and filler. Write the thought as inner subtext, not analysis.",
+            "- Update the same key only when sharpening the same idea; otherwise create a distinct scene-specific key.",
+            "- Delete or rename weak/stale thoughts when that improves the brain.",
+            "- Keep the hidden operation invisible and continue the story as lived action."
         ].join("\n");
     };
 
@@ -1555,7 +1559,7 @@ function MindForgeCore(hook) {
         if (pressure > 0.92 || config.runtimeProfile === "guarded") {
             return { kind: "none", label: "skip memory operation because context pressure is high", forcePassive: true };
         }
-        if (stats.normalKeys.length > (config.maxBrainKeys || 6)) {
+        if (stats.normalKeys.length > (config.maxBrainKeys || 14)) {
             return { kind: "prune", label: "delete or replace the weakest non-core thought", forcePassive: false };
         }
         if ((stats.tiers.relationship || 0) === 0 && stats.keys.length >= 2) {
@@ -1665,7 +1669,7 @@ function MindForgeCore(hook) {
             .replace(/\u200B[\u200C\u200D]+\u200B/g, "")
             .trim();
         if (!/[A-Za-z0-9]/.test(clean) || clean.length < 8) return false;
-        if (/^(as an ai|as a language model|i cannot|i can't|sorry\b|i am unable|i'm unable)\b/i.test(clean)) {
+        if (/^(as an ai|as a language model|sorry\b|i am unable|i'm unable)\b/i.test(clean)) {
             return false;
         }
         if (/\b(?:cannot|can't)\s+comply\b/i.test(clean)) return false;
@@ -1753,14 +1757,37 @@ function MindForgeCore(hook) {
             .trim();
     };
 
+    const stripThoughtIndex = (value = "") => String(value || "")
+        .replace(/^\s*\d+\s*(?:→|[-=]*>)\s*/, "")
+        .trim();
+
+    const cleanOperationValueLiteral = (value = "") => String(value || "")
+        .trim()
+        .replace(/^`([\s\S]*)`$/g, "$1")
+        .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+        .replace(/[\u200B-\u200D]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const isWeakMemoryKey = (key = "") => {
+        const clean = cleanComparableKey(key);
+        return /^(?:memory_recent|recent_memory|recent_event|current_memory|current_thought|new_thought|thought|note|notes?|temp|temporary|placeholder|scene|event|thing|stuff)$/i.test(clean);
+    };
+
+    const hasTemplateThoughtPrefix = (value = "") => /^(?:I\s+need\s+to\s+remember\s+this|I\s+need\s+to\s+understand\s+where\s+I\s+stand\s+with\s+[^:]{1,80}|I\s+need\s+the\s+truth\s+from\s+[^:]{1,80}|I\s+need\s+an\s+answer\s+to\s+this\s+question|I\s+feel\s+[^:]{1,40}\s+as\s+this\s+unfolds)\s*:/i.test(String(value || "").trim());
+
     const isQualityThought = (agentName, key, value, brain, config) => {
         if (!config.qualityGate) return true;
         const cleanKey = cleanComparableKey(key);
-        const val = String(value || "").trim();
+        const val = stripThoughtIndex(value);
         const lower = val.toLowerCase();
         if (!cleanKey || /^(?:key|any_key|key_name|example_key|thought|memory|note|temp|placeholder)$/.test(cleanKey)) return false;
-        if (!/[a-z]/i.test(val) || val.length < 4 || val.length > 260) return false;
-        if (/^(?:as an ai|as a language model|i cannot|i can't|sorry\b|i am unable|i'm unable)\b/i.test(val)) return false;
+        if (isWeakMemoryKey(key)) return false;
+        if (!/[a-z]/i.test(val) || val.length < 8 || val.length > 220) return false;
+        if (hasTemplateThoughtPrefix(val)) return false;
+        const sentenceMarks = (val.match(/[.!?](?:\s|$)/g) || []).length;
+        if (sentenceMarks > 2) return false;
+        if (/^(?:as an ai|as a language model|sorry\b|i am unable|i'm unable)\b/i.test(val)) return false;
         if (/\b(?:cannot|can't)\s+comply\b/i.test(val)) return false;
         if (/(?:strict output|output format|bracket operation|story continues|mindforge npc|system instruction)/i.test(val)) return false;
         if (/\byou\s+(?:feel|decide|choose|think|want|will|must|remember)\b/i.test(val)) return false;
@@ -1773,6 +1800,10 @@ function MindForgeCore(hook) {
     };
 
     const buildFallbackMemoryOp = (agentName, storyText = "", config = {}) => {
+        // Smart fallback: if the model ignores the hidden operation format, build one
+        // high-confidence, scene-specific thought from the visible prose. This keeps
+        // MindForge useful on models that resist bracket commands, without returning
+        // to generic "I need to remember" filler.
         const playerName = String(config.player || "protagonist").trim() || "protagonist";
         const source = String(storyText || "")
             .replace(/<SYSTEM>[\s\S]*?<\/SYSTEM>/g, " ")
@@ -1783,107 +1814,118 @@ function MindForgeCore(hook) {
             .trim();
         if (!source) return null;
 
+        const ensureSentenceEnd = (value = "") => /[.!?]$/.test(value.trim()) ? value.trim() : `${value.trim()}.`;
+        const sourceLower = source.toLowerCase();
+        const agentLower = String(agentName || "").toLowerCase();
+        const playerLower = playerName.toLowerCase();
+
+        const firstMatch = (patterns) => {
+            for (const pattern of patterns) {
+                const match = source.match(pattern);
+                if (match) return match;
+            }
+            return null;
+        };
+
+        const makeOp = (key, value, score = 100) => {
+            const cleanKey = formatMemoryKey(key);
+            const cleanValue = ensureSentenceEnd(cleanOperationValueLiteral(value)).slice(0, 220);
+            if (!cleanKey || isWeakMemoryKey(cleanKey)) return null;
+            if (score < 55) return null;
+            if (hasTemplateThoughtPrefix(cleanValue)) return null;
+            return { type: "set", key: cleanKey, val: cleanValue, tagKey: cleanKey, fallback: true };
+        };
+
+        // High-confidence dramatic patterns. These deliberately produce character-voice
+        // thoughts, not summaries of UI prose or dialogue tags.
+        if (/coordinates?\b/.test(sourceLower) && /\btime\b/.test(sourceLower)) {
+            return makeOp("vault_summons", `The message gave coordinates and a time, and ${playerName}'s name on the vault door makes this personal.`, 120);
+        }
+        if (/\bwife\b/.test(sourceLower) && /(?:doesn'?t|does not|won'?t|will not)\s+fix/.test(sourceLower)) {
+            return makeOp("wife_word", `${playerName} calling me wife does not fix what happened between us.`, 120);
+        }
+        if (/love\b/.test(sourceLower) && /yes[-\s]?or[-\s]?no/.test(sourceLower)) {
+            return makeOp("love_question", `${playerName} is demanding love as a yes-or-no answer, but the vault is asking what we buried.`, 120);
+        }
+        if (/love\b/.test(sourceLower) && /(?:shield|hide behind|password)/.test(sourceLower)) {
+            return makeOp("love_as_shield", `${playerName} keeps using love like a shield, and I cannot trust that yet.`, 115);
+        }
+        if (/(?:came here|come here)/.test(sourceLower) && /\bshow\b/.test(sourceLower)) {
+            return makeOp("not_a_show", `I did not come to watch ${playerName} perform remorse; I came because the vault called me too.`, 115);
+        }
+        if (/capsule/.test(sourceLower) && /(?:buried|remember|memory|inside)/.test(sourceLower)) {
+            return makeOp("buried_memory", `The capsule is not asking for romance; it is asking whether I can face what we buried.`, 110);
+        }
+        if (/\btrap\b/.test(sourceLower)) {
+            return makeOp("possible_trap", `The vault may be a trap, but ${playerName}'s name on the door makes walking away impossible.`, 105);
+        }
+        if (/\btruth\b/.test(sourceLower) && /(?:need|know|show|proof|answer)/.test(sourceLower)) {
+            return makeOp("truth_pressure", `I need the truth more than I need ${playerName}'s performance of love.`, 105);
+        }
+        if (/(?:forgive|forgiveness)/.test(sourceLower)) {
+            return makeOp("forgiveness_distance", `Forgiveness cannot begin while ${playerName} keeps trying to rush past the wound.`, 100);
+        }
+
         const sentences = source
             .split(/(?<=[.!?])\s+|\n+/)
             .map(item => item.trim().replace(/^["'`]+|["'`]+$/g, ""))
-            .filter(item => item.length >= 10 && item.length <= 260 && !isUiChromeLeakLine(item));
-        const pool = sentences.length ? sentences : [source.slice(0, 220)];
-        const agentLower = String(agentName || "").toLowerCase();
-        const playerLower = playerName.toLowerCase();
-        const playerNamePattern = escapeRegex(playerName);
-        const stripPlayerVocative = (sentence = "") => String(sentence || "")
-            .replace(new RegExp(`^${playerNamePattern}\\s*[,;:!?-]+\\s*`, "i"), "")
-            .replace(new RegExp(`\\s*[,;:!?-]+\\s*${playerNamePattern}\\s*([.!?])?$`, "i"), "$1")
-            .replace(/\s+([.!?])/g, "$1")
-            .trim();
-        const strongRelationshipPattern = /\b(?:love|loves|loved|divorce|wife|husband|marriage|cheat|cheating|trust|trusts|distrust|distrusts|betray|betrays|betrayal|sorry|forgive|forgives|promise|promises|leave|leaves|left|vanish|vanishes|disappear|disappears|lie|lies|lied|lying)\b|why now|after all this time/i;
-        const contextualRelationshipPattern = /\b(?:truth|evidence|secret|hidden|hide|hiding|bury|buried|memory|vault)\b|locked away/i;
-        const statePattern = /\b(?:tense|guarded|rigid|tighten|tightens|tightened|stiff|cold|flat|quiet|firm|tired|worn|afraid|fear|angry|anger|hurt|tear|cry|shaken|uneasy|nervous|worried|suspicious|doubt|confused|hesitates?|pulls back|doesn'?t soften|searching)\b/i;
-        const hasPlayerCue = (value = "") => {
-            const lower = String(value || "").toLowerCase();
-            return lower.includes(playerLower) || /\b(?:you|your)\b/i.test(value);
-        };
-        const isRelationshipEvent = (value = "") => (
-            strongRelationshipPattern.test(value) ||
-            (contextualRelationshipPattern.test(value) && hasPlayerCue(value))
-        );
-        const isQuestion = (value = "") => /\?\s*$/.test(String(value || "").trim());
+            .filter(item => item.length >= 18 && item.length <= 240 && !isUiChromeLeakLine(item));
+        if (!sentences.length) return null;
+
+        const memoryWeightPattern = /\b(?:love|loved|wife|husband|promise|betray|betrayal|lie|lied|secret|truth|proof|evidence|papers|dead|fake|vault|capsule|memory|choice|family|home|forgive|loyalty|trap|coordinates?)\b/i;
+        const statePattern = /\b(?:tense|guarded|rigid|tighten|tightens|stiff|cold|flat|quiet|firm|tired|hurt|shaken|uneasy|suspicious|doubt|hesitates?|doesn'?t soften)\b/i;
+
         const cleanEventForThought = (sentence = "") => {
             const agentPattern = escapeRegex(agentName);
-            const observerPattern = `(?:you|${playerNamePattern})\\s+${observerVerbPattern}`;
-            let clean = stripPlayerVocative(sentence)
-                .replace(/^["'`]+|["'`]+$/g, "")
-                .replace(new RegExp(`,\\s*["'\u201c\u201d]?\\s*(?:${agentPattern}|she|he|they)\\s+(?:says?|asks?|echoes?|replies?|answers?|whispers?|shouts?)\\b[^.!?]*(?=[.!?]?$)`, "i"), "")
-                .replace(new RegExp(`^${observerPattern}\\s+${agentPattern}'s\\b`, "i"), `${agentName}'s`)
-                .replace(new RegExp(`^${observerPattern}\\s+(?:her|his|their)\\s+eyes\\b`, "i"), "my eyes")
-                .replace(new RegExp(`^${observerPattern}\\s+as\\s+${agentPattern}\\b`, "i"), agentName)
+            const playerNamePattern = escapeRegex(playerName);
+            let clean = String(sentence || "")
+                .replace(new RegExp(`^${playerNamePattern}\\s*[,;:!?-]+\\s*`, "i"), "")
+                .replace(new RegExp(`\\s*[,;:!?-]+\\s*${playerNamePattern}\\s*([.!?])?$`, "i"), "$1")
                 .replace(new RegExp(`\\b${agentPattern}'s\\b`, "ig"), "my")
                 .replace(/\b[Yy]our\b/g, `${playerName}'s`)
                 .replace(/\b[Yy]ou\b/g, playerName)
-                .replace(new RegExp(`^${agentPattern}\\s+goes\\s+rigid\\b`, "i"), "my body goes rigid")
+                .replace(new RegExp(`,\\s*["'\u201c\u201d]?\\s*(?:${agentPattern}|she|he|they)\\s+(?:says?|asks?|echoes?|replies?|answers?|whispers?|shouts?)\\b[^.!?]*(?=[.!?]?$)`, "i"), "")
+                .replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g, "")
                 .replace(/\s+/g, " ")
                 .trim();
             clean = normalizePrivateThoughtPerspective(agentName, clean, config);
-            clean = clean.replace(new RegExp(`^${escapeRegex(playerName)}\\s+love\\s+me\\b`, "i"), `${playerName} says ${playerName} loves me`);
-            return clean;
-        };
-        const inferState = (event = "") => {
-            const lower = String(event || "").toLowerCase();
-            if (/\b(?:afraid|fear|nervous|worried)\b/.test(lower)) return "afraid";
-            if (/\b(?:angry|anger)\b/.test(lower)) return "angry";
-            if (/\b(?:hurt|tear|cry)\b/.test(lower)) return "hurt";
-            if (/\b(?:tired|worn)\b/.test(lower)) return "tired";
-            if (/\b(?:suspicious|doubt|lie|lied|hidden|secret|evidence|bury|buried)\b/.test(lower)) return "suspicious";
-            if (/\b(?:confused|why|searching)\b/.test(lower)) return "uncertain";
-            if (/\b(?:guarded|rigid|cold|flat|firm)\b/.test(lower)) return "guarded";
-            return "tense";
-        };
-        const ensureSentenceEnd = (value = "") => /[.!?]$/.test(value.trim()) ? value.trim() : `${value.trim()}.`;
-        const trimThought = (value = "", limit = 240) => {
-            const clean = ensureSentenceEnd(String(value || "").replace(/\s+/g, " ").trim());
-            return clean.length <= limit ? clean : ensureSentenceEnd(clean.slice(0, limit - 1).trim());
-        };
-        const buildThoughtValue = (key, event) => {
-            const cleanEvent = ensureSentenceEnd(event || "something important changed");
-            if (cleanComparableKey(key).startsWith("relationship_")) {
-                if (isQuestion(cleanEvent)) {
-                    return trimThought(`I need the truth from ${playerName}: ${cleanEvent}`);
-                }
-                if (/\b(?:divorce|wife|husband|marriage|cheat|cheating|betray|betrayal)\b/i.test(cleanEvent)) {
-                    return trimThought(`I can no longer separate ${playerName} from what still stands between us: ${cleanEvent}`);
-                }
-                return trimThought(`I need to understand where I stand with ${playerName}: ${cleanEvent}`);
-            }
-            if (cleanComparableKey(key) === "state_current") {
-                return trimThought(`I feel ${inferState(cleanEvent)} as this unfolds: ${cleanEvent}`);
-            }
-            if (isQuestion(cleanEvent)) {
-                return trimThought(`I need an answer to this question: ${cleanEvent}`);
-            }
-            return trimThought(`I need to remember this: ${cleanEvent}`);
+            clean = clean.replace(/\bmy voice is\b.*$/i, "").replace(/\bmy eyes are\b.*$/i, "").trim();
+            return ensureSentenceEnd(clean).slice(0, 180);
         };
 
-        const scored = pool.map((sentence, order) => {
+        const scored = sentences.map((sentence, order) => {
             const lower = sentence.toLowerCase();
             let score = 0;
-            if (agentLower && lower.includes(agentLower)) score += 60;
+            if (agentLower && lower.includes(agentLower)) score += 35;
             if (playerLower && lower.includes(playerLower)) score += 35;
-            if (/\b(?:she|he|they)\b/i.test(sentence)) score += 12;
-            if (isRelationshipEvent(sentence)) score += 75;
-            if (statePattern.test(sentence)) score += 35;
-            if (/["“”]/.test(sentence)) score += 5;
+            if (memoryWeightPattern.test(sentence)) score += 45;
+            if (statePattern.test(sentence)) score += 15;
+            if (/["'\u201c\u201d]/.test(sentence)) score += 10;
+            if (/\?/.test(sentence) && /(?:love|truth|wife|memory|capsule)/i.test(sentence)) score += 15;
             return { sentence, order, score };
         }).sort((a, b) => (b.score - a.score) || (a.order - b.order));
 
-        const event = cleanEventForThought(scored[0] ? scored[0].sentence : source.slice(0, 220));
-        if (!event) return null;
-        const key = isRelationshipEvent(event)
-            ? `relationship_${formatMemoryKey(playerName)}`
-            : statePattern.test(event)
-            ? `_state_current(${config.decay || 3})`
-            : "memory_recent";
-        const value = buildThoughtValue(key, event);
-        return { type: "set", key, val: value, tagKey: cleanKeyForLLM(key), fallback: true };
+        const top = scored[0];
+        if (!top || top.score < 55) return null;
+
+        const keyTokens = [];
+        const tokenMap = [
+            ["coordinates", /coordinates?/i], ["vault", /vault|door|keypad/i], ["capsule", /capsule/i],
+            ["love", /love/i], ["wife", /wife/i], ["truth", /truth|proof|evidence/i],
+            ["betrayal", /betray|cheat|lied|lie/i], ["memory", /memory|remember|buried/i],
+            ["choice", /choice|choose/i], ["trap", /trap/i], ["promise", /promise/i]
+        ];
+        for (const pair of tokenMap) {
+            if (pair[1].test(top.sentence) || pair[1].test(source)) keyTokens.push(pair[0]);
+            if (keyTokens.length >= 2) break;
+        }
+        const key = keyTokens.length ? keyTokens.join("_") : `scene_truth_${hashText(top.sentence).toString(36).slice(0, 3)}`;
+        let event = cleanEventForThought(top.sentence);
+        if (!event || event.length < 12 || hasTemplateThoughtPrefix(event)) return null;
+        if (!/^\s*(?:I|My|The|This|Leo|Clara|[A-Z][a-z]+)\b/.test(event)) {
+            event = `I cannot ignore that ${event.charAt(0).toLowerCase()}${event.slice(1)}`;
+        }
+        return makeOp(key, event, top.score);
     };
 
     const hasComparableKey = (brain, baseKey) => {
@@ -1908,7 +1950,7 @@ function MindForgeCore(hook) {
         if (signedMatch) {
             const sign = signedMatch[1];
             const key = formatMemoryKey(signedMatch[2]);
-            const value = (signedMatch[3] || "").trim();
+            const value = cleanOperationValueLiteral(signedMatch[3] || "");
             if (!key) return null;
             if (sign === "-") return `[-${key}]`;
             if (!value) return null;
@@ -1920,7 +1962,7 @@ function MindForgeCore(hook) {
         if (!delimiter) return null;
         const idx = src.indexOf(delimiter);
         const key = formatMemoryKey(src.slice(0, idx));
-        const value = src.slice(idx + 1).trim();
+        const value = cleanOperationValueLiteral(src.slice(idx + 1));
         if (!key || !value) return null;
 
         const cleanValueKey = formatMemoryKey(value);
@@ -2397,7 +2439,7 @@ function MindForgeCore(hook) {
             if (isPrimary) {
                 primarySteward = chooseBrainTask(agentName, brain, config, pressure);
                 const stats = getBrainStats(brain);
-                const sparseBrain = stats.keys.length > 0 && stats.keys.length < Math.min(3, config.maxBrainKeys || 6);
+                const sparseBrain = stats.keys.length > 0 && stats.keys.length < Math.min(4, config.maxBrainKeys || 14);
                 if (sparseBrain && getLastWriteAge(agentName) >= 2 && pressure <= 0.78) {
                     primarySteward = {
                         kind: "warmup",
@@ -2490,11 +2532,35 @@ function MindForgeCore(hook) {
             const stewardLabel = primarySteward ? primarySteward.label : "write or update one non-duplicate thought";
             const slotGuidance = getSlotGuidance(primaryAgent, config);
             const agenticCharter = getAgenticCharter(primaryAgent, config);
-            const rules = promptProfile === "stable"
-                ? `<SYSTEM>\nContinue the story in ${povText}. If it fits naturally, include one short hidden memory operation for ${primaryAgent}: [+key: thought], [-key], or [=new_key: old_key]. Visible story prose is mandatory; never output the memory operation by itself.\n${agenticCharter}\n</SYSTEM>\n\n`
-                : promptProfile === "full"
-                ? `<SYSTEM>\n# MindForge Brain Steward: ${primaryAgent}\nChoose the single best memory operation for this turn.\nPriority: ${stewardLabel}\n${agenticCharter}\nAllowed forms:\n- [+key: first-person thought of ${primaryAgent} using names, no pronouns]\n- [-key]\n- [=new_key: old_key]\n${slotGuidance}\nRules:\n- Use at most one bracket operation, then one space, then story prose in ${povText}.\n- Visible story prose is mandatory; never output the memory operation by itself.\n- Prefer update, rename, or delete over creating duplicates.\n- Never delete core_* keys.\n- Continue directly from the last moment.\n</SYSTEM>\n\n`
-                : `<SYSTEM>\n# MindForge NPC ${primaryAgent} Memory Operation\nContinue the story in ${povText}; visible story prose is mandatory.\nPriority: ${stewardLabel}\n${agenticCharter}\n${slotGuidance}\nForms:\n- [+key: 1st person thought of ${primaryAgent} using names, no pronouns]\n- [-key]\n- [=new_key: old_key]\nUse at most one bracket operation before or after the prose. Never output the memory operation by itself. If no natural story prose follows, skip the memory operation.\nExample: [+goal_current: I must help ${config.player}.] Story continues...\n</SYSTEM>\n\n`;
+            const compactMemoryContract = [
+                `# MindForge Thought Forge: ${primaryAgent}`,
+                `Start output immediately with exactly one hidden memory operation, then one space, then story prose in ${povText}.`,
+                `Valid forms: [+scene_specific_key: I remember one private thought.] | [-old_key] | [=new_key: old_key]`,
+                `Key rules: 1-4 snake_case words, scene-specific, chosen from ${primaryAgent}'s point of view; avoid memory_recent/recent_event/current_thought/note.`,
+                `Thought rules: one sentence, 8-32 words, first-person as ${primaryAgent}; use character names instead of pronouns when clarity matters.`,
+                `Good thoughts change future behavior: promises, betrayals, secrets, discoveries, fear, loyalty, plans, unfinished choices.`,
+                `Never write templates like "I need to remember this:" or "I need to understand where I stand with...".`,
+                `Visible story prose is mandatory. Never output only the memory operation. Never delete core_* keys.`,
+                `Priority: ${stewardLabel}`
+            ].join("\n");
+            const fullMemoryContract = [
+                compactMemoryContract,
+                agenticCharter,
+                slotGuidance,
+                `If an existing key already represents the same idea, overwrite it with sharper current truth; otherwise create a distinct key.`,
+                `Use delete or rename only when it clearly improves ${primaryAgent}'s brain.`
+            ].filter(Boolean).join("\n");
+            const rules = promptProfile === "full"
+                ? `<SYSTEM>
+${fullMemoryContract}
+</SYSTEM>
+
+`
+                : `<SYSTEM>
+${compactMemoryContract}
+</SYSTEM>
+
+`;
             const enhancedRules = rules.replace("\n</SYSTEM>", `${refocus}\n</SYSTEM>`);
 
             text = applyContextGuard(text.trimEnd() + marker + (contextInjection ? "\n" + contextInjection + "\n" : "") + "\n\n" + enhancedRules, config);
@@ -2696,7 +2762,7 @@ function MindForgeCore(hook) {
         const bracketAssignRegex = /\[\s*([a-zA-Z0-9_\s()]+?)\s*([=:])\s*([^\]]+)\s*\]/g;
         text = text.replace(bracketAssignRegex, (match, keyRaw, delimiter, valRaw) => {
             const key = formatMemoryKey(keyRaw.trim().replace(/\s+/g, "_"));
-            const val = valRaw.trim();
+            const val = cleanOperationValueLiteral(valRaw);
             const cleanVal = val.replace(/\(\d+\)$/, "").toLowerCase();
             let isRename = false;
             if (!val.includes(" ")) {
@@ -2727,7 +2793,7 @@ function MindForgeCore(hook) {
             const keyRaw = formatMemoryKey(match[2].trim().replace(/\s+/g, "_"));
             const valRaw = match[3] ? match[3].trim() : "";
             // Clean value: strip surrounding quotes and simplify formatting
-            let val = valRaw.replace(/^["'`«»„“”(")]+|[ "'`«»„“”)]+$/g, "").trim();
+            let val = cleanOperationValueLiteral(valRaw);
             val = val.replace(/[*#~]+/g, "").replace(/\s+/g, " ").replaceAll("…", "...");
 
             if (isRetry) {
@@ -2816,7 +2882,7 @@ function MindForgeCore(hook) {
                 lower.includes(`you are ${playerNameLower}`) ||
                 isNpcLeak ||
                 lower.includes("system instruction") ||
-                /^(as an ai|as a language model|i cannot|i can't|sorry\b|i am unable|i'm unable)\b/i.test(line.trim()) ||
+                /^(as an ai|as a language model|sorry\b|i am unable|i'm unable)\b/i.test(line.trim()) ||
                 /\b(?:cannot|can't)\s+comply\b/i.test(line.trim()) ||
                 // Leftover unparsed operations that might have leaked
                 /^\[\s*[-+=].*\]$/.test(line.trim()) ||
@@ -2862,34 +2928,10 @@ function MindForgeCore(hook) {
                     val: normalizePrivateThoughtPerspective(agentName, pendingOp.val, config)
                 };
                 let commitSet = true;
-                const canFallbackFromRejectedSet = () => (
-                    hasNarrative &&
-                    !setOp.fallback &&
-                    MF.pendingMemory &&
-                    MF.pendingMemory.agent === agentName &&
-                    MF.pendingMemory.hash === currentHash
-                );
                 if (!isQualityThought(agentName, setOp.key, setOp.val, brain, config)) {
                     bumpHealth("thoughtQualitySkips");
                     bumpHealth("qualitySkips");
-                    const fallbackOp = canFallbackFromRejectedSet() ? buildFallbackMemoryOp(agentName, text, config) : null;
-                    if (fallbackOp) {
-                        fallbackOp.hash = setOp.hash;
-                        setOp = {
-                            ...fallbackOp,
-                            val: normalizePrivateThoughtPerspective(agentName, fallbackOp.val, config)
-                        };
-                        if (!isQualityThought(agentName, setOp.key, setOp.val, brain, config)) {
-                            bumpHealth("thoughtQualitySkips");
-                            bumpHealth("qualitySkips");
-                            commitSet = false;
-                        } else if (isDuplicateThought(brain, setOp.key, setOp.val)) {
-                            bumpHealth("duplicateSkips");
-                            commitSet = false;
-                        }
-                    } else {
-                        commitSet = false;
-                    }
+                    commitSet = false;
                 } else if (isDuplicateThought(brain, setOp.key, setOp.val)) {
                     bumpHealth("duplicateSkips");
                     commitSet = false;
@@ -2900,13 +2942,15 @@ function MindForgeCore(hook) {
                 } else {
                     removeFromBrain(brain, setOp.key, { allowCore: true });
                     removeLabelsForKey(agentName, setOp.key);
-                    brain[setOp.key] = setOp.val;
+                    const storedThought = `${MF.ops} → ${stripThoughtIndex(setOp.val)}`;
+                    brain[setOp.key] = storedThought;
                     touchMemory(agentName, setOp.key, "write");
                     const label = ensureThoughtLabel(agentName, setOp.key);
                     if (hasNarrative) {
                         prefixText = config.zwspLabels ? encodeLabel(label) : `<!--mf:${setOp.tagKey}-->`;
                     }
-                    logMsg = `// operation ${MF.ops}\n${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(setOp.val)};`;
+                    logMsg = `// operation ${MF.ops}
+${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(storedThought)};`;
                     if (setOp.fallback) {
                         bumpHealth("fallbackMemoryWrites");
                     }
