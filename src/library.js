@@ -46,6 +46,7 @@ function MindForgeCore(hook) {
     MF.doctor = MF.doctor || { hash: "", turn: -1 };
     MF.health = MF.health || {};
     MF.scene = MF.scene || { agent: "", ttl: 0 };
+    MF.memoryOnly = MF.memoryOnly || { agent: "", turn: -999 };
 
     const bumpHealth = (key) => {
         MF.health[key] = (MF.health[key] || 0) + 1;
@@ -562,6 +563,47 @@ function MindForgeCore(hook) {
         return false;
     };
 
+    const findAgentLineIndex = (lines, agentName) => {
+        const target = agentName.toLowerCase();
+        for (let i = 0; i < lines.length; i++) {
+            const clean = String(lines[i] || "").trim();
+            if (!clean || clean.startsWith("//") || clean.startsWith(">") || clean.toLowerCase().startsWith("npc names")) {
+                continue;
+            }
+            const first = clean.split(",")[0].trim();
+            if (sanitizeAgentName(first).toLowerCase() === target) return i;
+        }
+        return -1;
+    };
+
+    const upsertAgentLineInConfig = (description, agentName, lineText) => {
+        const lines = String(description || "").split("\n");
+        const existingIdx = findAgentLineIndex(lines, agentName);
+        const existingLine = existingIdx === -1 ? lineText : lines.splice(existingIdx, 1)[0].trim();
+        const headerIdx = lines.findIndex(line => String(line || "").trim().toLowerCase().startsWith("npc names"));
+        let insertAt = headerIdx === -1 ? 0 : headerIdx + 1;
+
+        while (insertAt < lines.length) {
+            const clean = String(lines[insertAt] || "").trim();
+            if (!clean) {
+                insertAt++;
+                continue;
+            }
+            if (clean.startsWith("//") || clean.startsWith(">")) break;
+            if (clean.toLowerCase().startsWith("npc names")) {
+                insertAt++;
+                continue;
+            }
+            insertAt++;
+        }
+
+        lines.splice(insertAt, 0, existingLine || lineText);
+        return {
+            description: lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd(),
+            added: existingIdx === -1
+        };
+    };
+
     const buildDiscoveredAgent = (rawName) => {
         const cleanName = cleanDiscoveredName(rawName);
         const canonical = sanitizeAgentName(cleanName);
@@ -656,9 +698,12 @@ function MindForgeCore(hook) {
             if (!hasAgentInConfig(config, agent.name)) {
                 config.agents.push({ name: agent.name, aliases: agent.aliases });
             }
-            if (!hasAgentLine(card.description, agent.name)) {
-                card.description = `${String(card.description || "").trimEnd()}\n${agent.line}`;
-                getBrainCard(agent.name);
+            const placedLine = upsertAgentLineInConfig(card.description, agent.name, agent.line);
+            if (placedLine.description !== String(card.description || "").trimEnd()) {
+                card.description = placedLine.description;
+            }
+            getBrainCard(agent.name);
+            if (placedLine.added) {
                 bumpHealth("scenarioDiscoveries");
             }
         }
@@ -1529,7 +1574,7 @@ function MindForgeCore(hook) {
 
     const applyAdaptiveProfile = (config) => {
         const next = { ...config, agents: config.agents };
-        const failureScore = (MF.health.emptyOutputs || 0) + (MF.health.skippedCommits || 0) + ((MF.health.errors || 0) * 2);
+        const failureScore = (MF.health.emptyOutputs || 0) + (MF.health.skippedCommits || 0) + (MF.health.memoryOnlyOutputs || 0) + ((MF.health.errors || 0) * 2);
         const pressureScore = (MF.health.contextGuards || 0) + ((MF.health.loadSheds || 0) * 2);
         let mode = config.profile;
 
@@ -1835,6 +1880,8 @@ function MindForgeCore(hook) {
                     outputMsg += `- Load Sheds: ${MF.health.loadSheds || 0}\n`;
                     outputMsg += `- Scene Locks: ${MF.health.sceneLocks || 0}\n`;
                     outputMsg += `- Empty Outputs: ${MF.health.emptyOutputs || 0}\n`;
+                    outputMsg += `- Memory-Only Outputs: ${MF.health.memoryOnlyOutputs || 0}\n`;
+                    outputMsg += `- Memory-Only Cooldowns: ${MF.health.memoryOnlyCooldowns || 0}\n`;
                     outputMsg += `- Skipped Commits: ${MF.health.skippedCommits || 0}\n`;
                     outputMsg += `- Quality Skips: ${MF.health.qualitySkips || 0}\n`;
                     outputMsg += `- Thought Quality Skips: ${MF.health.thoughtQualitySkips || 0}\n`;
@@ -2124,18 +2171,31 @@ function MindForgeCore(hook) {
         // Apply turn-based thought chance reduction on player turns
         const lastAct = getPrevAction();
         const isPlayerAction = lastAct && (lastAct.type === "do" || lastAct.type === "say" || lastAct.type === "story");
+        const memoryOnlyAge = MF.memoryOnly && Number.isInteger(MF.memoryOnly.turn)
+            ? history.length - MF.memoryOnly.turn
+            : Infinity;
+        const recentMemoryOnlyOutput = (
+            MF.memoryOnly &&
+            MF.memoryOnly.agent === primaryAgent &&
+            memoryOnlyAge >= 0 &&
+            memoryOnlyAge <= 2
+        );
         let finalChance = (isPlayerAction && config.halfChance) ? (primaryMeta.chance / 2) : primaryMeta.chance;
         if (pressure > 0.92) {
             finalChance = 0;
         } else if (pressure > 0.78) {
             finalChance = Math.min(finalChance, 20);
         }
-        if (primarySteward && primarySteward.forceChance && config.bootstrap && pressure <= 0.78) {
+        if (primarySteward && primarySteward.forceChance && config.bootstrap && pressure <= 0.78 && !recentMemoryOnlyOutput) {
             finalChance = 100;
             bumpHealth("bootstrapPrompts");
         }
         if (primarySteward && primarySteward.forcePassive) {
             finalChance = 0;
+        }
+        if (recentMemoryOnlyOutput) {
+            finalChance = 0;
+            bumpHealth("memoryOnlyCooldowns");
         }
         const triggerChance = (finalChance / 100) > Math.random();
         const marker = "<|mindforge|>";
@@ -2157,10 +2217,10 @@ function MindForgeCore(hook) {
             const slotGuidance = getSlotGuidance(primaryAgent, config);
             const agenticCharter = getAgenticCharter(primaryAgent, config);
             const rules = promptProfile === "stable"
-                ? `<SYSTEM>\nContinue the story in ${povText}. If it fits naturally, begin with one short hidden memory operation for ${primaryAgent}: [+key: thought], [-key], or [=new_key: old_key]. Then write normal story prose.\n${agenticCharter}\n</SYSTEM>\n\n`
+                ? `<SYSTEM>\nContinue the story in ${povText}. If it fits naturally, include one short hidden memory operation for ${primaryAgent}: [+key: thought], [-key], or [=new_key: old_key]. Visible story prose is mandatory; never output the memory operation by itself.\n${agenticCharter}\n</SYSTEM>\n\n`
                 : promptProfile === "full"
-                ? `<SYSTEM>\n# MindForge Brain Steward: ${primaryAgent}\nChoose the single best memory operation for this turn.\nPriority: ${stewardLabel}\n${agenticCharter}\nAllowed forms:\n- [+key: first-person thought of ${primaryAgent} using names, no pronouns]\n- [-key]\n- [=new_key: old_key]\n${slotGuidance}\nRules:\n- Use exactly one bracket operation, then one space, then story prose in ${povText}.\n- Prefer update, rename, or delete over creating duplicates.\n- Never delete core_* keys.\n- Continue directly from the last moment.\n</SYSTEM>\n\n`
-                : `<SYSTEM>\n# MindForge NPC ${primaryAgent} Memory Operation\nStart response with EXACTLY one bracket operation.\nPriority: ${stewardLabel}\n${agenticCharter}\n${slotGuidance}\nForms:\n- [+key: 1st person thought of ${primaryAgent} using names, no pronouns]\n- [-key]\n- [=new_key: old_key]\nThen one space and continue story in ${povText}.\nExample: [+goal_current: I must help ${config.player}.] Story continues...\n</SYSTEM>\n\n`;
+                ? `<SYSTEM>\n# MindForge Brain Steward: ${primaryAgent}\nChoose the single best memory operation for this turn.\nPriority: ${stewardLabel}\n${agenticCharter}\nAllowed forms:\n- [+key: first-person thought of ${primaryAgent} using names, no pronouns]\n- [-key]\n- [=new_key: old_key]\n${slotGuidance}\nRules:\n- Use at most one bracket operation, then one space, then story prose in ${povText}.\n- Visible story prose is mandatory; never output the memory operation by itself.\n- Prefer update, rename, or delete over creating duplicates.\n- Never delete core_* keys.\n- Continue directly from the last moment.\n</SYSTEM>\n\n`
+                : `<SYSTEM>\n# MindForge NPC ${primaryAgent} Memory Operation\nContinue the story in ${povText}; visible story prose is mandatory.\nPriority: ${stewardLabel}\n${agenticCharter}\n${slotGuidance}\nForms:\n- [+key: 1st person thought of ${primaryAgent} using names, no pronouns]\n- [-key]\n- [=new_key: old_key]\nUse at most one bracket operation before or after the prose. Never output the memory operation by itself. If no natural story prose follows, skip the memory operation.\nExample: [+goal_current: I must help ${config.player}.] Story continues...\n</SYSTEM>\n\n`;
             const enhancedRules = rules.replace("\n</SYSTEM>", `${refocus}\n</SYSTEM>`);
 
             text = applyContextGuard(text.trimEnd() + marker + (contextInjection ? "\n" + contextInjection + "\n" : "") + "\n\n" + enhancedRules, config);
@@ -2428,6 +2488,7 @@ function MindForgeCore(hook) {
         const cleanedLines = [];
         const playerNameLower = (config.player || "protagonist").toLowerCase();
         const activeAgentLower = agentName ? agentName.toLowerCase() : "";
+        let removedUnsafeLine = false;
 
         for (let line of lines) {
             const lower = line.toLowerCase();
@@ -2454,7 +2515,7 @@ function MindForgeCore(hook) {
                 }
             }
 
-            if (
+            const shouldDropLine = (
                 lower.includes("strict output") ||
                 lower.includes("output format") ||
                 lower.includes("bracket operation") ||
@@ -2477,7 +2538,9 @@ function MindForgeCore(hook) {
                 /^\{\s*[-+=].*\}$/.test(line.trim()) ||
                 /^\{\s*(?:del(?:et(?:e[ds]?|ing))?|for(?:get(?:s|ting)?|got(?:ten)?)|remov(?:e[ds]?|ing)).*\}$/i.test(line.trim()) ||
                 /^\{\s*[a-zA-Z0-9_\s()]+?\s*[=:]\s*.*\}$/.test(line.trim())
-            ) {
+            );
+            if (shouldDropLine) {
+                removedUnsafeLine = true;
                 continue;
             }
             cleanedLines.push(line);
@@ -2486,7 +2549,13 @@ function MindForgeCore(hook) {
 
         let prefixText = "";
         const hasNarrative = isUsableNarrative(text);
-        if (pendingOp && hasNarrative) {
+        const memoryOnlyOutput = !!(pendingOp && !hasNarrative && text === "" && !removedUnsafeLine);
+        if (pendingOp && !hasNarrative && text === "") {
+            MF.memoryOnly = { agent: agentName, turn: history.length };
+            bumpHealth("memoryOnlyOutputs");
+        }
+
+        if (pendingOp && (hasNarrative || memoryOnlyOutput)) {
             let logMsg = "";
             MF.ops++;
 
@@ -2504,7 +2573,9 @@ function MindForgeCore(hook) {
                     brain[pendingOp.key] = pendingOp.val;
                     touchMemory(agentName, pendingOp.key, "write");
                     const label = ensureThoughtLabel(agentName, pendingOp.key);
-                    prefixText = config.zwspLabels ? encodeLabel(label) : `<!--mf:${pendingOp.tagKey}-->`;
+                    if (hasNarrative) {
+                        prefixText = config.zwspLabels ? encodeLabel(label) : `<!--mf:${pendingOp.tagKey}-->`;
+                    }
                     logMsg = `// operation ${MF.ops}\n${agentName.toLowerCase()}.${pendingOp.key} = ${JSON.stringify(pendingOp.val)};`;
                 }
             } else if (pendingOp.type === "delete") {
@@ -2557,7 +2628,9 @@ function MindForgeCore(hook) {
             updateWorldMemory(text, config, "output");
         }
 
-        if (text === "") {
+        if (text === "" && memoryOnlyOutput) {
+            text = "...";
+        } else if (text === "") {
             bumpHealth("emptyOutputs");
             text = "\u200B";
         }

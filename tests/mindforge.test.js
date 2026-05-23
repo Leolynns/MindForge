@@ -529,6 +529,34 @@ assert(parsedClara.bad_memory === undefined, "Brain mutation should be skipped w
 assert(globalThis.text === "\u200B", "Command-only bad output should degrade to a zero-width placeholder.");
 assert((globalThis.state.MindForge.health.skippedCommits || 0) > 0, "Skipped commits should be counted silently.");
 
+// --- Test 25b: Clean memory-only outputs commit once and avoid empty loops ---
+claraBrainCard.description = "";
+globalThis.state.MindForge.agent = "Clara";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.memoryOnly = { agent: "", turn: -999 };
+globalThis.history = [{ text: "Clara hesitates.", type: "story" }];
+globalThis.text = "[+memory_recent: Clara notices Alex is afraid.]";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+assert(parsedClara.memory_recent === "Clara notices Alex is afraid.", "Clean memory-only outputs should still commit the useful thought once.");
+assert(globalThis.text === "...", "Clean memory-only outputs should not display an empty response.");
+assert((globalThis.state.MindForge.health.memoryOnlyOutputs || 0) > 0, "Memory-only outputs should be counted separately.");
+configCard.entry = "MindForge Configuration\n\nEnabled: true\nThought Chance (0-100): 100\nBootstrap Empty Brains: true";
+globalThis.history = [
+    { text: "Clara hesitates.", type: "story" },
+    { text: globalThis.text, type: "continue" }
+];
+globalThis.text = "Recent Story:\nClara hesitates.\n...";
+Math.random = () => 0.1;
+MindForge("context");
+Math.random = originalRandom;
+assert(!globalThis.text.includes("Memory Operation"), "A recent memory-only output should suppress the next active memory prompt.");
+assert((globalThis.state.MindForge.health.memoryOnlyCooldowns || 0) > 0, "Memory-only cooldowns should be counted silently.");
+
 // --- Test 26: Memory tiers protect core memories automatically ---
 configCard.entry = "MindForge Configuration\n\nEnabled: true\nThought Chance (0-100): 100";
 claraBrainCard.description = "core_identity: Clara is sworn to protect the archive.\nkey1: v1\nkey2: v2\nkey3: v3\nkey4: v4\nkey5: v5\nkey6: v6";
@@ -582,6 +610,7 @@ assert((globalThis.state.MindForge.health.sceneLocks || 0) > 0, "Scene lock acti
 // --- Test 29: Stable profile uses a shorter low-risk prompt ---
 configCard.entry = "MindForge Configuration\n\nEnabled: true\nModel Profile (Stable/Balanced/Full): Stable\nThought Chance (0-100): 100";
 globalThis.state.MindForge.scene = { agent: "", ttl: 0 };
+globalThis.state.MindForge.memoryOnly = { agent: "", turn: -999 };
 globalThis.history = [{ text: "Clara enters quietly.", type: "story" }];
 globalThis.text = "Recent Story:\nClara enters quietly.";
 Math.random = () => 0.1;
@@ -908,8 +937,12 @@ globalThis.history = [{
 globalThis.text = `Recent Story:\n${globalThis.history[0].text}`;
 MindForge("context");
 const scenarioConfigCard = globalThis.storyCards.find(c => c.keys === "mindforge_config");
+const scenarioConfigLines = scenarioConfigCard.description.split("\n");
+const claraConfigLineIdx = scenarioConfigLines.findIndex(line => line.trim() === "Clara");
+const scenarioGuideLineIdx = scenarioConfigLines.findIndex(line => line.includes("MindForge Quick Guide"));
 assert(globalThis.state.MindForge.playerName === "Leo", "Scenario Auto-Discovery should cooperate with automatic player-name detection.");
-assert(scenarioConfigCard.description.split("\n").some(line => line.trim() === "Clara"), "Scenario Auto-Discovery should append a clear main NPC to config notes.");
+assert(claraConfigLineIdx !== -1, "Scenario Auto-Discovery should append a clear main NPC to config notes.");
+assert(scenarioGuideLineIdx === -1 || claraConfigLineIdx < scenarioGuideLineIdx, "Scenario Auto-Discovery should keep discovered NPCs above the guide comments.");
 assert(globalThis.storyCards.some(c => {
     try {
         const meta = JSON.parse(c.keys);
