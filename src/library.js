@@ -48,6 +48,7 @@ function MindForgeCore(hook) {
     MF.scene = MF.scene || { agent: "", ttl: 0 };
     MF.memoryOnly = MF.memoryOnly || { agent: "", turn: -999 };
     MF.pendingMemory = MF.pendingMemory || { agent: "", hash: "", turn: -999 };
+    MF.lastWrite = MF.lastWrite || {};
 
     const bumpHealth = (key) => {
         MF.health[key] = (MF.health[key] || 0) + 1;
@@ -1516,6 +1517,11 @@ function MindForgeCore(hook) {
         return { keys, normalKeys, tiers };
     };
 
+    const getLastWriteAge = (agentName) => {
+        const turn = MF.lastWrite && MF.lastWrite[agentName];
+        return Number.isInteger(turn) ? Math.max(0, history.length - turn) : Infinity;
+    };
+
     const getSlotGuidance = (agentName, config) => {
         if (!config.memorySlots) return "";
         return [
@@ -1734,7 +1740,7 @@ function MindForgeCore(hook) {
         const pool = sentences.length ? sentences : [source.slice(0, 220)];
         const agentLower = String(agentName || "").toLowerCase();
         const playerLower = playerName.toLowerCase();
-        const relationshipPattern = /\b(?:love|loved|divorce|wife|husband|marriage|cheat|cheating|trust|betray|sorry|hug|kiss|anger|angry|afraid|fear|tear|cry|forgive|promise|leave|left|vanish|disappear)\b/i;
+        const relationshipPattern = /\b(?:love|loved|divorce|wife|husband|marriage|cheat|cheating|trust|betray|sorry|hug|kiss|anger|angry|afraid|fear|tear|cry|forgive|promise|leave|left|vanish|disappear)\b|why now|after all this time/i;
 
         const scored = pool.map((sentence, order) => {
             const lower = sentence.toLowerCase();
@@ -2274,6 +2280,16 @@ function MindForgeCore(hook) {
 
             if (isPrimary) {
                 primarySteward = chooseBrainTask(agentName, brain, config, pressure);
+                const stats = getBrainStats(brain);
+                const sparseBrain = stats.keys.length > 0 && stats.keys.length < Math.min(3, config.maxBrainKeys || 6);
+                if (sparseBrain && getLastWriteAge(agentName) >= 2 && pressure <= 0.78) {
+                    primarySteward = {
+                        kind: "warmup",
+                        label: `add another useful ${agentName} thought before settling into normal rotation`,
+                        forcePassive: false,
+                        forceChance: true
+                    };
+                }
             }
 
             // Rank durable, relevant, and recently-used thoughts before rotating filler.
@@ -2781,6 +2797,7 @@ function MindForgeCore(hook) {
 
             if (logMsg) {
                 MF.hash = pendingOp.hash;
+                MF.lastWrite[agentName] = history.length;
                 if (MF.pendingMemory && MF.pendingMemory.agent === agentName) {
                     MF.pendingMemory = { agent: "", hash: "", turn: -999 };
                 }

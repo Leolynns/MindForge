@@ -574,6 +574,59 @@ globalThis.state.MindForge.memoryOnly = { agent: "", turn: -999 };
 globalThis.state.MindForge.scene = { agent: "", ttl: 0 };
 globalThis.state.MindForge.agent = "";
 
+// --- Test 25d: Ignored memory prompts fall back to deterministic brain writes ---
+claraBrainCard.description = "";
+configCard.entry = "MindForge Configuration\n\nEnabled: true\nPlayer Name: Leo\nThought Chance (0-100): 100\nHalf Thought Chance: false\nBootstrap Empty Brains: true";
+configCard.description = "NPC Names (First name followed by comma-separated aliases):\nClara, princess, her highness\nMarcus, captain, Sir Marcus, warrior";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.scene = { agent: "", ttl: 0 };
+globalThis.state.MindForge.pendingMemory = { agent: "", hash: "", turn: -999 };
+globalThis.history = [{ text: "Clara asks Leo what he put in the capsule.", type: "story" }];
+globalThis.text = "Recent Story:\nClara asks Leo what he put in the capsule.";
+Math.random = () => 0.1;
+MindForge("context");
+Math.random = originalRandom;
+globalThis.text = "Clara's jaw tightens. \"The divorce, Leo. The one you never signed.\"";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+assert(parsedClara.relationship_leo && parsedClara.relationship_leo.includes("Clara"), "Ignored memory prompts should still create a fallback NPC brain note.");
+assert(globalThis.text.includes("Clara's jaw tightens"), "Fallback memory writes should preserve normal visible story output.");
+assert((globalThis.state.MindForge.health.fallbackMemoryWrites || 0) > 0, "Fallback memory writes should be counted silently.");
+
+// --- Test 25e: Sparse brains keep requesting follow-up writes even when chance is low ---
+claraBrainCard.description = "memory_recent: Clara's gaze lingers on the capsule, then slides to Leo's face.";
+configCard.entry = "MindForge Configuration\n\nEnabled: true\nPlayer Name: Leo\nThought Chance (0-100): 0\nHalf Thought Chance: false\nBootstrap Empty Brains: true";
+globalThis.state.MindForge.hash = "";
+globalThis.state.MindForge.lastWrite = {};
+globalThis.state.MindForge.pendingMemory = { agent: "", hash: "", turn: -999 };
+globalThis.state.MindForge.scene = { agent: "", ttl: 0 };
+globalThis.history = [
+    { text: "Clara watches Leo beside the capsule.", type: "story" },
+    { text: "Leo kisses Clara beside the capsule.", type: "say" }
+];
+globalThis.text = "Recent Story:\nClara watches Leo beside the capsule.\nLeo kisses Clara beside the capsule.";
+Math.random = () => 0.99;
+MindForge("context");
+Math.random = originalRandom;
+assert(globalThis.state.MindForge.pendingMemory.agent === "Clara", "Sparse brains should force another memory prompt before settling into normal chance.");
+globalThis.text = "Clara pulls back slowly. \"Why now, Leo? After all this time.\"";
+MindForge("output");
+parsedClara = claraBrainCard.description.split("\n").reduce((acc, line) => {
+    const parts = line.split(":");
+    if (parts.length >= 2) acc[parts[0].trim()] = parts.slice(1).join(":").trim();
+    return acc;
+}, {});
+assert(parsedClara.relationship_leo && parsedClara.relationship_leo.includes("Why now"), "Sparse-brain fallback should add relationship memory from later normal prose.");
+configCard.description = "NPC Names (First name followed by comma-separated aliases):\nClara, princess, her highness\nMarcus, captain, Sir Marcus, warrior";
+globalThis.state.MindForge.pendingMemory = { agent: "", hash: "", turn: -999 };
+globalThis.state.MindForge.lastWrite = {};
+globalThis.state.MindForge.scene = { agent: "", ttl: 0 };
+globalThis.state.MindForge.agent = "";
+
 // --- Test 26: Memory tiers protect core memories automatically ---
 configCard.entry = "MindForge Configuration\n\nEnabled: true\nThought Chance (0-100): 100";
 claraBrainCard.description = "core_identity: Clara is sworn to protect the archive.\nkey1: v1\nkey2: v2\nkey3: v3\nkey4: v4\nkey5: v5\nkey6: v6";
