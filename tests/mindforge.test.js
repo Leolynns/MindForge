@@ -557,6 +557,23 @@ Math.random = originalRandom;
 assert(!globalThis.text.includes("Memory Operation"), "A recent memory-only output should suppress the next active memory prompt.");
 assert((globalThis.state.MindForge.health.memoryOnlyCooldowns || 0) > 0, "Memory-only cooldowns should be counted silently.");
 
+// --- Test 25c: UI chrome leaks are stripped from visible output ---
+const uiLeakSkipsBefore = globalThis.state.MindForge.health.uiLeakSkips || 0;
+globalThis.state.MindForge.agent = "";
+globalThis.history = [{ text: "Clara waits.", type: "story" }];
+globalThis.text = "\u200BW a i t i n g f o r i n p u t...w_penciltake a turnw_wandcontinuew_retryRetryw_backspaceerase";
+MindForge("output");
+assert(globalThis.text === "\u200B", "UI chrome-only output should be stripped even without an active agent.");
+assert((globalThis.state.MindForge.health.uiLeakSkips || 0) > uiLeakSkipsBefore, "UI chrome skips should be counted silently.");
+globalThis.state.MindForge.agent = "Clara";
+globalThis.history = [{ text: "Clara looks at Leo.", type: "story" }];
+globalThis.text = "\u200BS I L E N C E\nClara's lips press together.\n\u200BW a i t i n g f o r i n p u t...w_penciltake a turnw_wandcontinuew_retryRetryw_backspaceerase";
+MindForge("output");
+assert(globalThis.text === "Clara's lips press together.", "UI chrome and spaced meta beats should be stripped while preserving real story text.");
+globalThis.state.MindForge.memoryOnly = { agent: "", turn: -999 };
+globalThis.state.MindForge.scene = { agent: "", ttl: 0 };
+globalThis.state.MindForge.agent = "";
+
 // --- Test 26: Memory tiers protect core memories automatically ---
 configCard.entry = "MindForge Configuration\n\nEnabled: true\nThought Chance (0-100): 100";
 claraBrainCard.description = "core_identity: Clara is sworn to protect the archive.\nkey1: v1\nkey2: v2\nkey3: v3\nkey4: v4\nkey5: v5\nkey6: v6";
@@ -611,6 +628,8 @@ assert((globalThis.state.MindForge.health.sceneLocks || 0) > 0, "Scene lock acti
 configCard.entry = "MindForge Configuration\n\nEnabled: true\nModel Profile (Stable/Balanced/Full): Stable\nThought Chance (0-100): 100";
 globalThis.state.MindForge.scene = { agent: "", ttl: 0 };
 globalThis.state.MindForge.memoryOnly = { agent: "", turn: -999 };
+globalThis.state.MindForge.health = {};
+globalThis.state.MindForge.adaptiveMode = "";
 globalThis.history = [{ text: "Clara enters quietly.", type: "story" }];
 globalThis.text = "Recent Story:\nClara enters quietly.";
 Math.random = () => 0.1;

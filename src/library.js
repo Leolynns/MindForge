@@ -416,6 +416,30 @@ function MindForgeCore(hook) {
     const migrateConfigCard = (card) => {
         if (!card) return;
         let migrated = false;
+        const insertConfigGuide = (description) => {
+            const lines = String(description || "").split("\n");
+            const headerIdx = lines.findIndex(line => String(line || "").trim().toLowerCase().startsWith("npc names"));
+            let insertAt = headerIdx === -1 ? lines.length : headerIdx + 1;
+            while (insertAt < lines.length) {
+                const clean = String(lines[insertAt] || "").trim();
+                if (!clean) {
+                    insertAt++;
+                    continue;
+                }
+                if (clean.startsWith("//") || clean.startsWith(">")) break;
+                insertAt++;
+            }
+            lines.splice(insertAt, 0, ...configGuideText.split("\n"));
+            return lines.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+        };
+        const normalizeConfigGuide = (description) => {
+            const guideLines = new Set(configGuideText.split("\n"));
+            const lines = String(description || "")
+                .split("\n")
+                .filter(line => !guideLines.has(String(line || "").trimEnd()));
+            return insertConfigGuide(lines.join("\n"));
+        };
+
         if (typeof card.entry !== "string" || card.entry.trim() === "") {
             card.entry = defaultConfigEntry;
             migrated = true;
@@ -460,17 +484,20 @@ function MindForgeCore(hook) {
         }
 
         if (typeof card.description !== "string") {
-            card.description = `NPC Names (first name followed by optional comma-separated aliases):\n${configGuideText}\n`;
+            card.description = insertConfigGuide("NPC Names (first name followed by optional comma-separated aliases):\n");
             migrated = true;
         } else if (!card.description.toLowerCase().includes("npc names")) {
-            card.description = `NPC Names (first name followed by optional comma-separated aliases):\n${configGuideText}\n${card.description.trim()}`;
+            card.description = insertConfigGuide(`NPC Names (first name followed by optional comma-separated aliases):\n${card.description.trim()}`);
             migrated = true;
         } else if (!card.description.includes("MindForge Quick Guide")) {
-            card.description = card.description.replace(
-                /(NPC Names[^\n]*:\n?)/i,
-                `$1${configGuideText}\n`
-            );
+            card.description = insertConfigGuide(card.description);
             migrated = true;
+        } else {
+            const normalizedDescription = normalizeConfigGuide(card.description);
+            if (normalizedDescription !== card.description.trimEnd()) {
+                card.description = normalizedDescription;
+                migrated = true;
+            }
         }
 
         if (migrated) bumpHealth("configMigrations");
@@ -1297,6 +1324,28 @@ function MindForgeCore(hook) {
         return foundAgents.slice(0, config.maxAgents || 3);
     };
 
+    const recentHistoryMentionsAgent = (config, agentName) => {
+        const agent = (config.agents || []).find(a => a.name.toLowerCase() === String(agentName || "").toLowerCase());
+        if (!agent) return false;
+        const lookback = config.lookback || 5;
+        const source = history
+            .slice(Math.max(0, history.length - lookback))
+            .map(action => action && (action.text || action.rawText || ""))
+            .filter(Boolean)
+            .join("\n")
+            .split("\n")
+            .filter(line => !line.includes(">>>") && !line.includes("<<<"))
+            .join("\n");
+        for (const alias of agent.aliases || []) {
+            try {
+                if (new RegExp(`\\b${escapeRegex(alias)}\\b`, "i").test(source)) return true;
+            } catch {
+                if (source.toLowerCase().includes(String(alias || "").toLowerCase())) return true;
+            }
+        }
+        return false;
+    };
+
     // Read legacy HTML memory tags from older outputs.
     const scanMemoryTags = (srcText, limit = 5) => {
         const keys = [];
@@ -1616,6 +1665,38 @@ function MindForgeCore(hook) {
         return words.length >= 2 || clean.length >= 16;
     };
 
+    const compactSpacedLetters = (value = "") => String(value || "")
+        .replace(/(?:\b[A-Za-z]\b[\s.?!'`"-]*){3,}/g, match => match.replace(/[^A-Za-z0-9]+/g, ""))
+        .replace(/[^a-zA-Z0-9]+/g, "")
+        .toLowerCase();
+
+    const isUiChromeLeakLine = (line = "") => {
+        const clean = String(line || "").replace(/[\u200B-\u200D]/g, "").trim();
+        if (!clean) return false;
+        const lower = clean.toLowerCase();
+        const compact = compactSpacedLetters(clean);
+        const isSpacedWord = /^\s*(?:[A-Za-z]\s+){2,}[A-Za-z][.!?]*\s*$/.test(clean);
+        if (/(?:waiting\s*for\s*input|w_pencil|w_wand|w_retry|w_backspace|take\s*a\s*turn)/i.test(clean)) return true;
+        if (compact.includes("waitingforinput")) return true;
+        if (compact.includes("wpenciltakeaturn") || compact.includes("wwandcontinue") || compact.includes("wretryretry") || compact.includes("wbackspaceerase")) return true;
+        if (isSpacedWord && /^(?:silence|continue|retry|erase|takeaturn)$/.test(compact)) return true;
+        return false;
+    };
+
+    const stripUiChromeLeaks = (srcText = "") => {
+        const lines = String(srcText || "").split("\n");
+        const kept = [];
+        let removed = 0;
+        for (const line of lines) {
+            if (isUiChromeLeakLine(line)) {
+                removed++;
+                continue;
+            }
+            kept.push(line);
+        }
+        return { text: kept.join("\n").trim(), removed };
+    };
+
     const isQualityThought = (agentName, key, value, brain, config) => {
         if (!config.qualityGate) return true;
         const cleanKey = cleanComparableKey(key);
@@ -1880,6 +1961,7 @@ function MindForgeCore(hook) {
                     outputMsg += `- Load Sheds: ${MF.health.loadSheds || 0}\n`;
                     outputMsg += `- Scene Locks: ${MF.health.sceneLocks || 0}\n`;
                     outputMsg += `- Empty Outputs: ${MF.health.emptyOutputs || 0}\n`;
+                    outputMsg += `- UI Leak Skips: ${MF.health.uiLeakSkips || 0}\n`;
                     outputMsg += `- Memory-Only Outputs: ${MF.health.memoryOnlyOutputs || 0}\n`;
                     outputMsg += `- Memory-Only Cooldowns: ${MF.health.memoryOnlyCooldowns || 0}\n`;
                     outputMsg += `- Skipped Commits: ${MF.health.skippedCommits || 0}\n`;
@@ -2065,6 +2147,14 @@ function MindForgeCore(hook) {
         }
 
         let activeAgents = detectTriggers(config).filter(name => getAgentMeta(name, config).enabled);
+        if (
+            MF.scene.agent &&
+            !activeAgents.includes(MF.scene.agent) &&
+            recentHistoryMentionsAgent(config, MF.scene.agent) &&
+            getAgentMeta(MF.scene.agent, config).enabled
+        ) {
+            activeAgents.push(MF.scene.agent);
+        }
         if (MF.scene.agent && activeAgents.includes(MF.scene.agent) && activeAgents[0] !== MF.scene.agent && MF.scene.ttl > 0) {
             activeAgents = [MF.scene.agent, ...activeAgents.filter(name => name !== MF.scene.agent)];
             MF.scene.ttl--;
@@ -2255,6 +2345,17 @@ function MindForgeCore(hook) {
             bumpHealth("emptyOutputs");
             text = "\u200B";
             return;
+        }
+
+        const uiCleaned = stripUiChromeLeaks(text);
+        if (uiCleaned.removed) {
+            text = uiCleaned.text;
+            MF.health.uiLeakSkips = (MF.health.uiLeakSkips || 0) + uiCleaned.removed;
+            if (text === "") {
+                bumpHealth("emptyOutputs");
+                text = "\u200B";
+                return;
+            }
         }
 
         if (!agentName) {
@@ -2515,7 +2616,9 @@ function MindForgeCore(hook) {
                 }
             }
 
+            const uiLeakLine = isUiChromeLeakLine(line);
             const shouldDropLine = (
+                uiLeakLine ||
                 lower.includes("strict output") ||
                 lower.includes("output format") ||
                 lower.includes("bracket operation") ||
@@ -2541,6 +2644,9 @@ function MindForgeCore(hook) {
             );
             if (shouldDropLine) {
                 removedUnsafeLine = true;
+                if (uiLeakLine) {
+                    bumpHealth("uiLeakSkips");
+                }
                 continue;
             }
             cleanedLines.push(line);
