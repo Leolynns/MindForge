@@ -1,0 +1,11 @@
+MindForge is an independent AI Dungeon scripting project by Leolynn.
+
+MindForge was inspired by Inner Self by LewdLeah and by common AI Dungeon
+scenario scripting patterns around story cards, context modifiers, and output
+post-processing. Thank you to Inner Self for the inspiration and for helping
+shape the broader NPC-memory scripting style in the AI Dungeon community.
+
+MindForge's implementation is its own runtime: configuration card format,
+private-mind prompting, multi-NPC budgeting, memory scoring, invisible labels,
+Auto Doctor maintenance, parser repair, quality gates, tests, and release
+build scripts are original to this project.

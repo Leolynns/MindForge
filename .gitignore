@@ -1,0 +1,12 @@
+node_modules/
+npm-debug.log*
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+dist/
+scratch/
+Inner-Self-main/

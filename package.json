@@ -1,0 +1,22 @@
+{
+  "name": "mindforge-aidungeon",
+  "version": "0.1.0",
+  "private": false,
+  "author": "Leolynn",
+  "description": "A lightweight private-mind NPC memory engine for AI Dungeon scenarios.",
+  "type": "commonjs",
+  "scripts": {
+    "check": "node --check src/library.js && node --check tests/mindforge.test.js && node --check scripts/build-release.js",
+    "test": "node tests/mindforge.test.js",
+    "build": "node scripts/build-release.js"
+  },
+  "keywords": [
+    "ai-dungeon",
+    "scenario",
+    "memory",
+    "npc",
+    "story-cards",
+    "interactive-fiction"
+  ],
+  "license": "MIT"
+}
