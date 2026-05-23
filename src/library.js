@@ -47,6 +47,7 @@ function MindForgeCore(hook) {
     MF.health = MF.health || {};
     MF.scene = MF.scene || { agent: "", ttl: 0 };
     MF.memoryOnly = MF.memoryOnly || { agent: "", turn: -999 };
+    MF.pendingMemory = MF.pendingMemory || { agent: "", hash: "", turn: -999 };
 
     const bumpHealth = (key) => {
         MF.health[key] = (MF.health[key] || 0) + 1;
@@ -1541,11 +1542,11 @@ function MindForgeCore(hook) {
             return { kind: "write", label: "write one useful thought", forcePassive: false };
         }
         const stats = getBrainStats(brain);
+        if (stats.keys.length === 0 && pressure <= 0.92) {
+            return { kind: "bootstrap", label: `create ${agentName}'s first durable thought`, forcePassive: false, forceChance: true };
+        }
         if (pressure > 0.92 || config.runtimeProfile === "guarded") {
             return { kind: "none", label: "skip memory operation because context pressure is high", forcePassive: true };
-        }
-        if (stats.keys.length === 0) {
-            return { kind: "bootstrap", label: `create ${agentName}'s first durable thought`, forcePassive: false, forceChance: true };
         }
         if (stats.normalKeys.length > (config.maxBrainKeys || 6)) {
             return { kind: "prune", label: "delete or replace the weakest non-core thought", forcePassive: false };
@@ -1713,6 +1714,54 @@ function MindForgeCore(hook) {
         if (agentLower && lower.includes(`you are ${agentLower}`)) return false;
         if (playerLower && lower.includes(`you are ${playerLower}`)) return false;
         return true;
+    };
+
+    const buildFallbackMemoryOp = (agentName, storyText = "", config = {}) => {
+        const playerName = String(config.player || "protagonist").trim() || "protagonist";
+        const source = String(storyText || "")
+            .replace(/<SYSTEM>[\s\S]*?<\/SYSTEM>/g, " ")
+            .replace(/<!--mf:[a-zA-Z0-9_]+-->/g, " ")
+            .replace(/\u200B[\u200C\u200D]*\u200B?/g, " ")
+            .replace(/\[[+=-][^\]]+\]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        if (!source) return null;
+
+        const sentences = source
+            .split(/(?<=[.!?])\s+|\n+/)
+            .map(item => item.trim().replace(/^["'`]+|["'`]+$/g, ""))
+            .filter(item => item.length >= 10 && item.length <= 260 && !isUiChromeLeakLine(item));
+        const pool = sentences.length ? sentences : [source.slice(0, 220)];
+        const agentLower = String(agentName || "").toLowerCase();
+        const playerLower = playerName.toLowerCase();
+        const relationshipPattern = /\b(?:love|loved|divorce|wife|husband|marriage|cheat|cheating|trust|betray|sorry|hug|kiss|anger|angry|afraid|fear|tear|cry|forgive|promise|leave|left|vanish|disappear)\b/i;
+
+        const scored = pool.map((sentence, order) => {
+            const lower = sentence.toLowerCase();
+            let score = 0;
+            if (agentLower && lower.includes(agentLower)) score += 60;
+            if (playerLower && lower.includes(playerLower)) score += 35;
+            if (/\b(?:she|he|they)\b/i.test(sentence)) score += 12;
+            if (relationshipPattern.test(sentence)) score += 30;
+            if (/["“”]/.test(sentence)) score += 5;
+            return { sentence, order, score };
+        }).sort((a, b) => (b.score - a.score) || (a.order - b.order));
+
+        let value = (scored[0] ? scored[0].sentence : source.slice(0, 220))
+            .replace(/\b[Yy]our\b/g, `${playerName}'s`)
+            .replace(/\b[Yy]ou\b/g, playerName)
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 220);
+        if (!value) return null;
+        if (agentLower && !value.toLowerCase().includes(agentLower)) {
+            value = `${agentName} observes: ${value}`.slice(0, 240);
+        }
+
+        const key = relationshipPattern.test(value)
+            ? `relationship_${formatMemoryKey(playerName)}`
+            : "memory_recent";
+        return { type: "set", key, val: value, tagKey: cleanKeyForLLM(key), fallback: true };
     };
 
     const hasComparableKey = (brain, baseKey) => {
@@ -1967,6 +2016,7 @@ function MindForgeCore(hook) {
                     outputMsg += `- Skipped Commits: ${MF.health.skippedCommits || 0}\n`;
                     outputMsg += `- Quality Skips: ${MF.health.qualitySkips || 0}\n`;
                     outputMsg += `- Thought Quality Skips: ${MF.health.thoughtQualitySkips || 0}\n`;
+                    outputMsg += `- Fallback Memory Writes: ${MF.health.fallbackMemoryWrites || 0}\n`;
                     outputMsg += `- Duplicate Skips: ${MF.health.duplicateSkips || 0}\n`;
                     outputMsg += `- Core Memory Skips: ${MF.health.coreSkips || 0}\n`;
                     outputMsg += `- Smart Prunes: ${MF.health.smartPrunes || 0}\n`;
@@ -2289,8 +2339,10 @@ function MindForgeCore(hook) {
         }
         const triggerChance = (finalChance / 100) > Math.random();
         const marker = "<|mindforge|>";
+        const contextHistoryHash = getHistoryHash();
 
         if (!isRetry && triggerChance) {
+            MF.pendingMemory = { agent: primaryAgent, hash: contextHistoryHash, turn: history.length };
             const povText = config.pov === 1 
                 ? `first-person POV (as ${config.player})` 
                 : config.pov === 3 
@@ -2315,6 +2367,9 @@ function MindForgeCore(hook) {
 
             text = applyContextGuard(text.trimEnd() + marker + (contextInjection ? "\n" + contextInjection + "\n" : "") + "\n\n" + enhancedRules, config);
         } else {
+            if (MF.pendingMemory && MF.pendingMemory.agent === primaryAgent) {
+                MF.pendingMemory = { agent: "", hash: "", turn: -999 };
+            }
             const povText = config.pov === 1 
                 ? `first-person POV (as ${config.player})` 
                 : config.pov === 3 
@@ -2532,6 +2587,8 @@ function MindForgeCore(hook) {
         const match = text.match(opRegex);
 
         let pendingOp = null;
+        const currentHash = getHistoryHash();
+        const isRetry = MF.hash === currentHash;
 
         if (match) {
             const sign = match[1];
@@ -2540,10 +2597,6 @@ function MindForgeCore(hook) {
             // Clean value: strip surrounding quotes and simplify formatting
             let val = valRaw.replace(/^["'`«»„“”(")]+|[ "'`«»„“”)]+$/g, "").trim();
             val = val.replace(/[*#~]+/g, "").replace(/\s+/g, " ").replaceAll("…", "...");
-
-            const currentHash = getHistoryHash();
-
-            const isRetry = MF.hash === currentHash;
 
             if (isRetry) {
                 bumpHealth("retrySkips");
@@ -2655,6 +2708,12 @@ function MindForgeCore(hook) {
 
         let prefixText = "";
         const hasNarrative = isUsableNarrative(text);
+        if (!pendingOp && hasNarrative && !isRetry && MF.pendingMemory && MF.pendingMemory.agent === agentName && MF.pendingMemory.hash === currentHash) {
+            pendingOp = buildFallbackMemoryOp(agentName, text, config);
+            if (pendingOp) {
+                pendingOp.hash = currentHash;
+            }
+        }
         const memoryOnlyOutput = !!(pendingOp && !hasNarrative && text === "" && !removedUnsafeLine);
         if (pendingOp && !hasNarrative && text === "") {
             MF.memoryOnly = { agent: agentName, turn: history.length };
@@ -2683,6 +2742,9 @@ function MindForgeCore(hook) {
                         prefixText = config.zwspLabels ? encodeLabel(label) : `<!--mf:${pendingOp.tagKey}-->`;
                     }
                     logMsg = `// operation ${MF.ops}\n${agentName.toLowerCase()}.${pendingOp.key} = ${JSON.stringify(pendingOp.val)};`;
+                    if (pendingOp.fallback) {
+                        bumpHealth("fallbackMemoryWrites");
+                    }
                 }
             } else if (pendingOp.type === "delete") {
                 if (isCoreKey(pendingOp.key)) {
@@ -2719,6 +2781,9 @@ function MindForgeCore(hook) {
 
             if (logMsg) {
                 MF.hash = pendingOp.hash;
+                if (MF.pendingMemory && MF.pendingMemory.agent === agentName) {
+                    MF.pendingMemory = { agent: "", hash: "", turn: -999 };
+                }
                 brainCard.entry = `${brainCard.entry.trim()}\n\n${logMsg}`.trim();
                 if (brainCard.entry.length > 2500) {
                     brainCard.entry = "// Bounded Operation Log:\n" + brainCard.entry.split("\n\n").slice(-10).join("\n\n");
