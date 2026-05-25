@@ -1,7 +1,7 @@
 /**
  * MindForge Core Library
  * A lightweight, context-efficient, high-quality agentic NPC memory script for AI Dungeon.
- * MindForge Quality Forge v4: strict first-person thoughts, smart scene fallback, leak cleanup, grammar repair.
+ * MindForge Quality Forge v5.1: strict first-person thoughts, smart scene fallback, memory-operation leak cleanup, grammar repair.
  */
 function MindForge(hook) {
     "use strict";
@@ -1754,6 +1754,26 @@ function MindForgeCore(hook) {
         return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), removed };
     };
 
+    const isMemoryOperationLeakLine = (line = "") => {
+        const clean = String(line || "").replace(/[\u200B-\u200D]/g, "").trim();
+        if (!clean) return false;
+        return /(?:^|[-=:\s])memory[ _-]?operation\s*[:=]/i.test(clean) || /^[-=]{1,}\s*memory[ _-]?operation\b/i.test(clean);
+    };
+
+    const stripMemoryOperationLeaks = (srcText = "") => {
+        const lines = String(srcText || "").split("\n");
+        const kept = [];
+        let removed = 0;
+        for (const line of lines) {
+            if (isMemoryOperationLeakLine(line)) {
+                removed++;
+                continue;
+            }
+            kept.push(line);
+        }
+        return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), removed };
+    };
+
     const isNarrativeMemoryLeak = (agentName, value = "") => {
         const clean = String(value || "").replace(/\s+/g, " ").trim();
         if (!clean) return false;
@@ -1889,6 +1909,9 @@ function MindForgeCore(hook) {
 
     const cleanOperationValueLiteral = (value = "") => String(value || "")
         .trim()
+        .replace(/^[-=]{1,}\s*memory[ _-]?operation\s*[:=]\s*/i, "")
+        .replace(/^memory[ _-]?operation\s*[:=]\s*/i, "")
+        .replace(/\s*=[-=]{1,}\s*$/g, "")
         .replace(/^`([\s\S]*)`$/g, "$1")
         .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
         .replace(/[\u200B-\u200D]/g, "")
@@ -1897,7 +1920,7 @@ function MindForgeCore(hook) {
 
     const isWeakMemoryKey = (key = "") => {
         const clean = cleanComparableKey(key);
-        return /^(?:memory_recent|recent_memory|recent_event|current_memory|current_thought|new_thought|thought|note|notes?|temp|temporary|placeholder|scene|event|thing|stuff)$/i.test(clean);
+        return /^(?:memory_operation|memory_operation_.+|memory_recent|recent_memory|recent_event|current_memory|current_thought|new_thought|thought|note|notes?|temp|temporary|placeholder|scene|event|thing|stuff)$/i.test(clean);
     };
 
     const hasTemplateThoughtPrefix = (value = "") => /^(?:I\s+need\s+to\s+remember\s+this|I\s+need\s+to\s+understand\s+where\s+I\s+stand\s+with\s+[^:]{1,80}|I\s+need\s+the\s+truth\s+from\s+[^:]{1,80}|I\s+need\s+an\s+answer\s+to\s+this\s+question|I\s+feel\s+[^:]{1,40}\s+as\s+this\s+unfolds)\s*:/i.test(String(value || "").trim());
@@ -1907,6 +1930,8 @@ function MindForgeCore(hook) {
         const cleanKey = cleanComparableKey(key);
         const val = stripThoughtIndex(value);
         const lower = val.toLowerCase();
+        if (/memory[ _-]?operation/i.test(cleanKey) || /memory[ _-]?operation/i.test(val)) return false;
+        if (/[-=]{1,}\s*$/.test(val) || /(?:^|\s)[+\-=]\s*[a-zA-Z0-9_]{2,}\s*:\s*/.test(val)) return false;
         if (!cleanKey || /^(?:key|any_key|key_name|example_key|thought|memory|note|temp|placeholder)$/.test(cleanKey)) return false;
         if (isWeakMemoryKey(key)) return false;
         if (!/[a-z]/i.test(val) || val.length < 8 || val.length > 220) return false;
@@ -1939,7 +1964,7 @@ function MindForgeCore(hook) {
             .replace(/\u200B[\u200C\u200D]*\u200B?/g, " ")
             .replace(/\[[+=-][^\]]+\]/g, " ")
             .replace(/\([^\n()]{0,80}[+=-][^\n()]{0,220}\)/g, " ");
-        source = stripCodeDebugLeaks(stripUiChromeLeaks(source).text).text.replace(/\s+/g, " ").trim();
+        source = stripMemoryOperationLeaks(stripCodeDebugLeaks(stripUiChromeLeaks(source).text).text).text.replace(/\s+/g, " ").trim();
         if (!source) return null;
 
         const ensureSentenceEnd = (value = "") => /[.!?]$/.test(value.trim()) ? value.trim() : `${value.trim()}.`;
@@ -1955,9 +1980,9 @@ function MindForgeCore(hook) {
         const makeOp = (key, value, score = 100) => {
             const cleanKey = formatMemoryKey(key);
             const cleanValue = ensureSentenceEnd(cleanOperationValueLiteral(value)).slice(0, 220);
-            if (!cleanKey || isWeakMemoryKey(cleanKey) || isCodeDebugLeakLine(cleanKey)) return null;
+            if (!cleanKey || isWeakMemoryKey(cleanKey) || isCodeDebugLeakLine(cleanKey) || /memory[ _-]?operation/i.test(cleanKey)) return null;
             if (score < 55) return null;
-            if (hasTemplateThoughtPrefix(cleanValue) || isCodeDebugLeakLine(cleanValue)) return null;
+            if (hasTemplateThoughtPrefix(cleanValue) || isCodeDebugLeakLine(cleanValue) || /memory[ _-]?operation/i.test(cleanValue)) return null;
             return { type: "set", key: cleanKey, val: cleanValue, tagKey: cleanKey, fallback: true };
         };
 
@@ -2055,7 +2080,12 @@ function MindForgeCore(hook) {
     };
 
     const normalizeOperationContent = (content, brain) => {
-        const src = String(content || "").trim().replace(/==+/g, "=").replace(/::+/g, ":");
+        let src = String(content || "").trim().replace(/==+/g, "=").replace(/::+/g, ":");
+        src = src
+            .replace(/^[-=]{1,}\s*memory[ _-]?operation\s*[:=]\s*/i, "")
+            .replace(/^memory[ _-]?operation\s*[:=]\s*/i, "")
+            .replace(/\s*=[-=]{1,}\s*$/g, "")
+            .trim();
         if (!src) return null;
 
         const deleteMatch = src.match(/^(?:[-]\s*|del(?:et(?:e[ds]?|ing))?|for(?:get(?:s|ting)?|got(?:ten)?)|remov(?:e[ds]?|ing))\s+([a-zA-Z0-9_\s()]+)$/i);
@@ -2090,7 +2120,18 @@ function MindForgeCore(hook) {
         return `[+${key}: ${value}]`;
     };
 
+    const normalizeMemoryOperationWrappers = (srcText, brain) => String(srcText || "").replace(/[-=]{1,}\s*memory[ _-]?operation\s*[:=]\s*([\s\S]{1,260}?)\s*=[-=]{1,}/gi, (raw, content) => {
+        const normalized = normalizeOperationContent(content, brain);
+        return normalized ? ` ${normalized} ` : " ";
+    });
+
     const normalizeOperationSyntax = (srcText, brain) => {
+        srcText = normalizeMemoryOperationWrappers(srcText, brain);
+        srcText = String(srcText || "").split("\n").map(line => {
+            if (!isMemoryOperationLeakLine(line)) return line;
+            const normalized = normalizeOperationContent(line, brain);
+            return normalized || "";
+        }).join("\n");
         const candidates = [];
         const blockRegex = /([(\[{])\s*([\s\S]{1,260}?)\s*([)\]}])/g;
         let match;
@@ -2653,7 +2694,8 @@ function MindForgeCore(hook) {
             const compactMemoryContract = [
                 `# MindForge Thought Forge: ${primaryAgent}`,
                 `Start output immediately with exactly one hidden memory operation, then one space, then story prose in ${povText}.`,
-                `Valid forms: [+scene_specific_key: I remember one private thought.] | [-old_key] | [=new_key: old_key]`,
+                `Valid forms only: [+scene_specific_key: I remember one private thought.] | [-old_key] | [=new_key: old_key]`,
+                `Do not use wrappers or labels like memory_operation, internal state, code, -=...=-, or markdown fences.`,
                 `Key rules: 1-4 snake_case words, scene-specific, chosen from ${primaryAgent}'s point of view; avoid memory_recent/recent_event/current_thought/note.`,
                 `Thought rules: one sentence, 8-32 words, first-person as ${primaryAgent}; use character names instead of pronouns when clarity matters.`,
                 `Good thoughts change future behavior: promises, betrayals, secrets, discoveries, fear, loyalty, plans, unfinished choices.`,
@@ -2741,6 +2783,11 @@ ${compactMemoryContract}
         }
 
         if (!agentName) {
+            const noAgentMemoryClean = text.replace(/[-=]{1,}\s*memory[ _-]?operation\s*[:=]\s*[\s\S]{1,260}?\s*=[-=]{1,}/gi, "").trim();
+            if (noAgentMemoryClean !== text.trim()) {
+                bumpHealth("memoryOperationLeakSkips");
+                text = noAgentMemoryClean || "\u200B";
+            }
             return;
         }
 
@@ -2965,6 +3012,11 @@ ${compactMemoryContract}
         }
 
         // --- OUTPUT SANITIZATION ---
+        const memoryLeakCleanup = stripMemoryOperationLeaks(text);
+        if (memoryLeakCleanup.removed) {
+            bumpHealth("memoryOperationLeakSkips");
+            text = memoryLeakCleanup.text;
+        }
         const lines = text.split("\n");
         const cleanedLines = [];
         const playerNameLower = (config.player || "protagonist").toLowerCase();
@@ -2998,9 +3050,11 @@ ${compactMemoryContract}
 
             const uiLeakLine = isUiChromeLeakLine(line);
             const codeDebugLeakLine = isCodeDebugLeakLine(line);
+            const memoryOpLeakLine = isMemoryOperationLeakLine(line);
             const shouldDropLine = (
                 uiLeakLine ||
                 codeDebugLeakLine ||
+                memoryOpLeakLine ||
                 lower.includes("strict output") ||
                 lower.includes("output format") ||
                 lower.includes("bracket operation") ||
@@ -3031,6 +3085,9 @@ ${compactMemoryContract}
                 }
                 if (codeDebugLeakLine) {
                     bumpHealth("codeLeakSkips");
+                }
+                if (memoryOpLeakLine) {
+                    bumpHealth("memoryOperationLeakSkips");
                 }
                 continue;
             }
