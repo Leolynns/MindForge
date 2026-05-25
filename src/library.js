@@ -1,7 +1,7 @@
 /**
  * MindForge Core Library
  * A lightweight, context-efficient, high-quality agentic NPC memory script for AI Dungeon.
- * MindForge Quality Forge v2: strict thoughts, smart scene fallback, lower default context.
+ * MindForge Quality Forge v4: strict first-person thoughts, smart scene fallback, leak cleanup, grammar repair.
  */
 function MindForge(hook) {
     "use strict";
@@ -1787,19 +1787,100 @@ function MindForgeCore(hook) {
         return lower;
     };
 
+    const fixFirstPersonGrammar = (value = "") => String(value || "")
+        .replace(/\bI\s+doesn[’']?t\b/ig, "I don't")
+        .replace(/\bI\s+does\s+not\b/ig, "I do not")
+        .replace(/\bI\s+isn[’']?t\b/ig, "I am not")
+        .replace(/\bI\s+is\b/ig, "I am")
+        .replace(/\bI\s+aren[’']?t\b/ig, "I am not")
+        .replace(/\bI\s+are\b/ig, "I am")
+        .replace(/\bI\s+wasn[’']?t\b/ig, "I was not")
+        .replace(/\bI\s+weren[’']?t\b/ig, "I was not")
+        .replace(/\bI\s+were\b/ig, "I was")
+        .replace(/\bI\s+hasn[’']?t\b/ig, "I have not")
+        .replace(/\bI\s+has\b/ig, "I have")
+        .replace(/\bI\s+hadn[’']?t\b/ig, "I had not")
+        .replace(/\bI\s+goes\b/ig, "I go")
+        .replace(/\bI\s+says\b/ig, "I say")
+        .replace(/\bI\s+asks\b/ig, "I ask")
+        .replace(/\bI\s+looks\b/ig, "I look")
+        .replace(/\bI\s+watches\b/ig, "I watch")
+        .replace(/\bI\s+keeps\b/ig, "I keep")
+        .replace(/\bI\s+stays\b/ig, "I stay")
+        .replace(/\bI\s+stands\b/ig, "I stand")
+        .replace(/\bI\s+steps\b/ig, "I step")
+        .replace(/\bI\s+stops\b/ig, "I stop")
+        .replace(/\bI\s+moves\b/ig, "I move")
+        .replace(/\bI\s+takes\b/ig, "I take")
+        .replace(/\bI\s+touches\b/ig, "I touch")
+        .replace(/\bI\s+reaches\b/ig, "I reach")
+        .replace(/\bI\s+pulls\b/ig, "I pull")
+        .replace(/\bI\s+holds\b/ig, "I hold")
+        .replace(/\bI\s+knows\b/ig, "I know")
+        .replace(/\bI\s+thinks\b/ig, "I think")
+        .replace(/\bI\s+feels\b/ig, "I feel")
+        .replace(/\bI\s+wants\b/ig, "I want")
+        .replace(/\bI\s+needs\b/ig, "I need")
+        .replace(/\bI\s+refuses\b/ig, "I refuse")
+        .replace(/\bI\s+hesitates\b/ig, "I hesitate")
+        .replace(/\bI\s+flinches\b/ig, "I flinch")
+        .replace(/\bI\s+remembers\b/ig, "I remember")
+        .replace(/\bI\s+notices\b/ig, "I notice")
+        .replace(/\bI\s+realizes\b/ig, "I realize")
+        .replace(/\bI\s+believes\b/ig, "I believe")
+        .replace(/\bI\s+tries\b/ig, "I try")
+        .replace(/\bI\s+carries\b/ig, "I carry")
+        .replace(/\bI\s+worries\b/ig, "I worry")
+        .replace(/\bI\s+studies\b/ig, "I study")
+        .replace(/\bI\s+measures\b/ig, "I measure")
+        .replace(/\bI\s+tracks\b/ig, "I track")
+        .replace(/\bI\s+(?:do not|don't)\s+steps\b/ig, "I don't step")
+        .replace(/\bI\s+(?:do not|don't)\s+moves\b/ig, "I don't move")
+        .replace(/\bI\s+(?:do not|don't)\s+looks\b/ig, "I don't look")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const deepenFallbackThought = (value = "") => {
+        let clean = fixFirstPersonGrammar(cleanOperationValueLiteral(value));
+        if (/^I\s+don[’']?t\s+step\s+closer\.?$/i.test(clean)) {
+            return "I keep my distance because I do not trust what this moment is becoming.";
+        }
+        if (/^I\s+don[’']?t\s+(?:move|come closer|approach)\.?$/i.test(clean)) {
+            return "I keep still because moving closer feels like giving up control.";
+        }
+        if (/^I\s+(?:stay|stand)\s+(?:still|silent)\.?$/i.test(clean)) {
+            return "I stay still because I am not ready to give this moment an answer.";
+        }
+        if (/^I\s+look\s+(?:at|toward)\b/i.test(clean) && clean.length < 70) {
+            return `${clean.replace(/\.$/, "")} because I am trying to understand what it means for me.`;
+        }
+        if (/^That[’']?s\s+why\b/i.test(clean)) {
+            return `I understand now: ${clean.charAt(0).toLowerCase()}${clean.slice(1)}`;
+        }
+        if (/^It\s+(?:means|proves|shows)\b/i.test(clean)) {
+            return `I cannot ignore it: ${clean.charAt(0).toLowerCase()}${clean.slice(1)}`;
+        }
+        return clean;
+    };
+
     const normalizePrivateThoughtPerspective = (agentName, value = "", config = {}) => {
         const playerName = cleanPlayerName(config.player) || String(config.player || "protagonist").trim();
-        if (!playerName) return String(value || "").trim();
-        const playerPattern = escapeRegex(playerName);
+        const agent = sanitizeAgentName(agentName);
+        const playerPattern = playerName ? escapeRegex(playerName) : "protagonist";
+        const agentSubject = agent ? `(?:${escapeRegex(agent)}|she|he|they)` : "(?:she|he|they)";
         const thoughtPrefix = "((?:I\\s+(?:need|must)\\s+to\\s+remember\\s+this|I\\s+remember|I\\s+notice|I\\s+need\\s+to\\s+understand[^:]{0,90}|I\\s+feel[^:]{0,90})\\s*:\\s*)?";
-        return String(value || "")
+        const normalized = String(value || "")
             .replace(new RegExp(`^${thoughtPrefix}${playerPattern}\\s+${observerVerbPattern}\\s+my\\s+eyes\\b`, "i"), "$1my eyes")
-            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)(?:she|he|they)\\s+goes\\s+rigid\\b`, "ig"), "$1my body goes rigid")
-            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)(?:she|he|they)\\s+([A-Za-z]+)\\b`, "ig"), (match, prefix, verb) => `${prefix}I ${toFirstPersonVerb(verb)}`)
+            .replace(new RegExp(`\\b${agent ? escapeRegex(agent) : "__never__"}'s\\s+(${privateBodyNounPattern})\\b`, "ig"), "my $1")
+            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)${agentSubject}\\s+doesn[’']?t\\b`, "ig"), "$1I don't")
+            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)${agentSubject}\\s+does\\s+not\\b`, "ig"), "$1I do not")
+            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)${agentSubject}\\s+goes\\s+rigid\\b`, "ig"), "$1my body goes rigid")
+            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)${agentSubject}\\s+([A-Za-z]+)\\b`, "ig"), (match, prefix, verb) => `${prefix}I ${toFirstPersonVerb(verb)}`)
             .replace(new RegExp(`\\b(?:her|his|their)\\s+(${privateBodyNounPattern})\\b`, "ig"), "my $1")
             .replace(/\b(?:herself|himself|themselves)\b/ig, "myself")
             .replace(/\s+/g, " ")
             .trim();
+        return fixFirstPersonGrammar(normalized);
     };
 
     const stripThoughtIndex = (value = "") => String(value || "")
@@ -1830,6 +1911,7 @@ function MindForgeCore(hook) {
         if (isWeakMemoryKey(key)) return false;
         if (!/[a-z]/i.test(val) || val.length < 8 || val.length > 220) return false;
         if (hasTemplateThoughtPrefix(val)) return false;
+        if (/\bI\s+(?:doesn[’']?t|does\s+not|does|is|are|has|goes|says|asks|looks|keeps|stays|steps|knows|thinks|feels|wants|needs|refuses)\b/i.test(val)) return false;
         if (isCodeDebugLeakLine(val)) return false;
         const sentenceMarks = (val.match(/[.!?](?:\s|$)/g) || []).length;
         if (sentenceMarks > 2) return false;
@@ -1950,9 +2032,11 @@ function MindForgeCore(hook) {
             if (new RegExp(`^${agentPattern}\\s+`, "i").test(clean)) {
                 clean = clean.replace(new RegExp(`^${agentPattern}\\s+`, "i"), "I ");
             }
+            clean = deepenFallbackThought(clean);
             if (!/^(?:I|My|The|This|That|[A-Z][a-z]+)\b/.test(clean)) {
                 clean = `I cannot ignore that ${clean.charAt(0).toLowerCase()}${clean.slice(1)}`;
             }
+            clean = fixFirstPersonGrammar(clean);
             return ensureSentenceEnd(clean).slice(0, 190);
         };
 
