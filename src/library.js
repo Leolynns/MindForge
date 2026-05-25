@@ -1709,6 +1709,51 @@ function MindForgeCore(hook) {
         return { text: kept.join("\n").trim(), removed };
     };
 
+    const isCodeDebugLeakLine = (line = "") => {
+        const clean = String(line || "").replace(/[\u200B-\u200D]/g, "").trim();
+        if (!clean) return false;
+        const lower = clean.toLowerCase();
+        if (/^```/.test(clean)) return true;
+        if (/^#{1,6}\s*(?:[-=]{3,}|.*(?:brain|internal state|scene continuation|memory operation|operation log|mindforge))/i.test(clean)) return true;
+        if (/^(?:\/\/|#)\s*(?:[-=]{3,}|.*(?:brain|internal state|scene continuation|memory operation|operation log|mindforge))/i.test(clean)) return true;
+        if (/^[-=]{5,}$/.test(clean)) return true;
+        if (/^(?:import\s+[a-zA-Z_][\w.]*(?:\s*,\s*[a-zA-Z_][\w.]*)*|from\s+[a-zA-Z_][\w.]*\s+import\b)/.test(clean)) return true;
+        if (/^(?:const|let|var)\s+[a-zA-Z_$][\w$]*\s*=/.test(clean)) return true;
+        if (/^(?:function|def|class)\s+[a-zA-Z_$][\w$]*\b/.test(clean)) return true;
+        if (/^[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)?\s*=\s*#?\s*$/.test(clean)) return true;
+        if (/^[a-zA-Z_$][\w$]*(?:_state|_brain|_memory|State|Brain|Memory)\s*=/.test(clean)) return true;
+        if (/^[a-zA-Z_$][\w$]*(?:\.[a-zA-Z_$][\w$]*)?\s*=\s*(?:#|\{|\[|new\s+|function\b)/.test(clean)) return true;
+        if (/^(?:brain|memory|internal state|scene continuation)\s*[:=]/i.test(clean)) return true;
+        if (lower.includes("internal state") && lower.includes("brain")) return true;
+        if (lower.includes("scene continuation") && /^#|^\/\//.test(clean)) return true;
+        return false;
+    };
+
+    const stripCodeDebugLeaks = (srcText = "") => {
+        const lines = String(srcText || "").split("\n");
+        const kept = [];
+        let removed = 0;
+        let droppingFence = false;
+        for (const line of lines) {
+            const clean = String(line || "").trim();
+            if (/^```/.test(clean)) {
+                droppingFence = !droppingFence;
+                removed++;
+                continue;
+            }
+            if (droppingFence) {
+                removed++;
+                continue;
+            }
+            if (isCodeDebugLeakLine(line)) {
+                removed++;
+                continue;
+            }
+            kept.push(line);
+        }
+        return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), removed };
+    };
+
     const isNarrativeMemoryLeak = (agentName, value = "") => {
         const clean = String(value || "").replace(/\s+/g, " ").trim();
         if (!clean) return false;
@@ -1785,6 +1830,7 @@ function MindForgeCore(hook) {
         if (isWeakMemoryKey(key)) return false;
         if (!/[a-z]/i.test(val) || val.length < 8 || val.length > 220) return false;
         if (hasTemplateThoughtPrefix(val)) return false;
+        if (isCodeDebugLeakLine(val)) return false;
         const sentenceMarks = (val.match(/[.!?](?:\s|$)/g) || []).length;
         if (sentenceMarks > 2) return false;
         if (/^(?:as an ai|as a language model|sorry\b|i am unable|i'm unable)\b/i.test(val)) return false;
@@ -1800,131 +1846,119 @@ function MindForgeCore(hook) {
     };
 
     const buildFallbackMemoryOp = (agentName, storyText = "", config = {}) => {
-        // Smart fallback: if the model ignores the hidden operation format, build one
-        // high-confidence, scene-specific thought from the visible prose. This keeps
-        // MindForge useful on models that resist bracket commands, without returning
-        // to generic "I need to remember" filler.
-        const playerName = String(config.player || "protagonist").trim() || "protagonist";
-        const source = String(storyText || "")
+        // Generic fallback: if the model ignores the hidden operation format, build one
+        // conservative, scene-specific thought from the visible prose. This must never
+        // contain showcase-only names, locations, or hand-authored scenario assumptions.
+        const playerName = cleanPlayerName(config.player) || String(config.player || "protagonist").trim() || "protagonist";
+        const agent = sanitizeAgentName(agentName) || "agent";
+        let source = String(storyText || "")
             .replace(/<SYSTEM>[\s\S]*?<\/SYSTEM>/g, " ")
             .replace(/<!--mf:[a-zA-Z0-9_]+-->/g, " ")
             .replace(/\u200B[\u200C\u200D]*\u200B?/g, " ")
             .replace(/\[[+=-][^\]]+\]/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
+            .replace(/\([^\n()]{0,80}[+=-][^\n()]{0,220}\)/g, " ");
+        source = stripCodeDebugLeaks(stripUiChromeLeaks(source).text).text.replace(/\s+/g, " ").trim();
         if (!source) return null;
 
         const ensureSentenceEnd = (value = "") => /[.!?]$/.test(value.trim()) ? value.trim() : `${value.trim()}.`;
-        const sourceLower = source.toLowerCase();
-        const agentLower = String(agentName || "").toLowerCase();
+        const agentLower = agent.toLowerCase();
         const playerLower = playerName.toLowerCase();
-
-        const firstMatch = (patterns) => {
-            for (const pattern of patterns) {
-                const match = source.match(pattern);
-                if (match) return match;
-            }
-            return null;
-        };
+        const bannedKeyTokens = new Set([
+            "the", "and", "but", "with", "from", "into", "onto", "this", "that", "there", "then",
+            "she", "her", "hers", "him", "his", "they", "them", "their", "you", "your", "yours",
+            "said", "says", "asked", "asks", "looked", "looks", "eyes", "face", "voice", "hand", "hands",
+            agentLower, playerLower, "protagonist", "agent"
+        ]);
 
         const makeOp = (key, value, score = 100) => {
             const cleanKey = formatMemoryKey(key);
             const cleanValue = ensureSentenceEnd(cleanOperationValueLiteral(value)).slice(0, 220);
-            if (!cleanKey || isWeakMemoryKey(cleanKey)) return null;
+            if (!cleanKey || isWeakMemoryKey(cleanKey) || isCodeDebugLeakLine(cleanKey)) return null;
             if (score < 55) return null;
-            if (hasTemplateThoughtPrefix(cleanValue)) return null;
+            if (hasTemplateThoughtPrefix(cleanValue) || isCodeDebugLeakLine(cleanValue)) return null;
             return { type: "set", key: cleanKey, val: cleanValue, tagKey: cleanKey, fallback: true };
         };
 
-        // High-confidence dramatic patterns. These deliberately produce character-voice
-        // thoughts, not summaries of UI prose or dialogue tags.
-        if (/coordinates?\b/.test(sourceLower) && /\btime\b/.test(sourceLower)) {
-            return makeOp("vault_summons", `The message gave coordinates and a time, and ${playerName}'s name on the vault door makes this personal.`, 120);
-        }
-        if (/\bwife\b/.test(sourceLower) && /(?:doesn'?t|does not|won'?t|will not)\s+fix/.test(sourceLower)) {
-            return makeOp("wife_word", `${playerName} calling me wife does not fix what happened between us.`, 120);
-        }
-        if (/love\b/.test(sourceLower) && /yes[-\s]?or[-\s]?no/.test(sourceLower)) {
-            return makeOp("love_question", `${playerName} is demanding love as a yes-or-no answer, but the vault is asking what we buried.`, 120);
-        }
-        if (/love\b/.test(sourceLower) && /(?:shield|hide behind|password)/.test(sourceLower)) {
-            return makeOp("love_as_shield", `${playerName} keeps using love like a shield, and I cannot trust that yet.`, 115);
-        }
-        if (/(?:came here|come here)/.test(sourceLower) && /\bshow\b/.test(sourceLower)) {
-            return makeOp("not_a_show", `I did not come to watch ${playerName} perform remorse; I came because the vault called me too.`, 115);
-        }
-        if (/capsule/.test(sourceLower) && /(?:buried|remember|memory|inside)/.test(sourceLower)) {
-            return makeOp("buried_memory", `The capsule is not asking for romance; it is asking whether I can face what we buried.`, 110);
-        }
-        if (/\btrap\b/.test(sourceLower)) {
-            return makeOp("possible_trap", `The vault may be a trap, but ${playerName}'s name on the door makes walking away impossible.`, 105);
-        }
-        if (/\btruth\b/.test(sourceLower) && /(?:need|know|show|proof|answer)/.test(sourceLower)) {
-            return makeOp("truth_pressure", `I need the truth more than I need ${playerName}'s performance of love.`, 105);
-        }
-        if (/(?:forgive|forgiveness)/.test(sourceLower)) {
-            return makeOp("forgiveness_distance", `Forgiveness cannot begin while ${playerName} keeps trying to rush past the wound.`, 100);
-        }
-
-        const sentences = source
+        const rawSentences = source
             .split(/(?<=[.!?])\s+|\n+/)
-            .map(item => item.trim().replace(/^["'`]+|["'`]+$/g, ""))
-            .filter(item => item.length >= 18 && item.length <= 240 && !isUiChromeLeakLine(item));
-        if (!sentences.length) return null;
+            .map(item => item.trim().replace(/^['"`“”]+|['"`“”]+$/g, ""))
+            .filter(item => item.length >= 14 && item.length <= 260 && !isUiChromeLeakLine(item) && !isCodeDebugLeakLine(item));
+        if (!rawSentences.length) return null;
 
-        const memoryWeightPattern = /\b(?:love|loved|wife|husband|promise|betray|betrayal|lie|lied|secret|truth|proof|evidence|papers|dead|fake|vault|capsule|memory|choice|family|home|forgive|loyalty|trap|coordinates?)\b/i;
-        const statePattern = /\b(?:tense|guarded|rigid|tighten|tightens|stiff|cold|flat|quiet|firm|tired|hurt|shaken|uneasy|suspicious|doubt|hesitates?|doesn'?t soften)\b/i;
+        const durablePattern = /\b(?:promise|promised|betray|betrayed|betrayal|lie|lied|secret|truth|proof|evidence|memory|remember|forgive|forgiveness|trust|choice|choose|family|home|loyalty|fear|afraid|trap|danger|dead|fake|letter|papers|key|door|name|love|wife|husband|friend|enemy|son|daughter|mother|father|blood|debt|oath|guilt|shame|hurt|wound)\b/i;
+        const pressurePattern = /\b(?:no|not|never|can't|cannot|won't|doesn'?t|refuses?|demands?|asks?|question|answer|why|how|what)\b/i;
+        const statePattern = /\b(?:tense|guarded|rigid|tight|stiff|cold|flat|quiet|firm|tired|hurt|shaken|uneasy|suspicious|hesitates?|flinch(?:es|ed)?|panic|angry|soften(?:s|ed)?|fear|afraid)\b/i;
+
+        const scoreSentence = (sentence, order) => {
+            const lower = sentence.toLowerCase();
+            let score = Math.max(0, 20 - order);
+            if (agentLower && lower.includes(agentLower)) score += 25;
+            if (playerLower && lower.includes(playerLower)) score += 25;
+            if (durablePattern.test(sentence)) score += 45;
+            if (pressurePattern.test(sentence)) score += 18;
+            if (statePattern.test(sentence)) score += 12;
+            if (/["“”]/.test(sentence)) score += 8;
+            if (/\?/.test(sentence)) score += 10;
+            if (/\b(?:corridor|room|floor|wall|table|boots?|eyes?|breath|hands?|voice|sound|shutter|tile)\b/i.test(sentence) && !durablePattern.test(sentence)) score -= 18;
+            if (/^(?:above|below|nearby|somewhere|the sound|the room|the corridor)\b/i.test(sentence)) score -= 25;
+            return { sentence, order, score };
+        };
+
+        const top = rawSentences.map(scoreSentence).sort((a, b) => (b.score - a.score) || (a.order - b.order))[0];
+        if (!top || top.score < 55) return null;
+
+        const buildKey = (sentence = "") => {
+            const clean = sentence
+                .replace(new RegExp(`\\b${escapeRegex(agent)}\\b`, "ig"), " ")
+                .replace(new RegExp(`\\b${escapeRegex(playerName)}\\b`, "ig"), " ")
+                .replace(/[^A-Za-z0-9_' -]+/g, " ")
+                .toLowerCase();
+            const tokens = [];
+            for (const raw of clean.split(/\s+/)) {
+                const token = raw.replace(/^_+|_+$/g, "").replace(/'s$/i, "");
+                if (!token || token.length < 3 || bannedKeyTokens.has(token)) continue;
+                if (/^(?:ing|ion|tion|ment)$/.test(token)) continue;
+                if (!tokens.includes(token)) tokens.push(token);
+                if (tokens.length >= 3) break;
+            }
+            if (tokens.length >= 2) return tokens.slice(0, 3).join("_");
+            if (tokens.length === 1) return `${tokens[0]}_${hashText(sentence).toString(36).slice(0, 3)}`;
+            return `scene_${hashText(sentence).toString(36).slice(0, 4)}`;
+        };
 
         const cleanEventForThought = (sentence = "") => {
-            const agentPattern = escapeRegex(agentName);
-            const playerNamePattern = escapeRegex(playerName);
+            const agentPattern = escapeRegex(agent);
+            const playerPattern = escapeRegex(playerName);
             let clean = String(sentence || "")
-                .replace(new RegExp(`^${playerNamePattern}\\s*[,;:!?-]+\\s*`, "i"), "")
-                .replace(new RegExp(`\\s*[,;:!?-]+\\s*${playerNamePattern}\\s*([.!?])?$`, "i"), "$1")
+                .replace(new RegExp(`^${playerPattern}\\s*[,;:!?-]+\\s*`, "i"), "")
+                .replace(new RegExp(`\\s*[,;:!?-]+\\s*${playerPattern}\\s*([.!?])?$`, "i"), "$1")
                 .replace(new RegExp(`\\b${agentPattern}'s\\b`, "ig"), "my")
                 .replace(/\b[Yy]our\b/g, `${playerName}'s`)
                 .replace(/\b[Yy]ou\b/g, playerName)
-                .replace(new RegExp(`,\\s*["'\u201c\u201d]?\\s*(?:${agentPattern}|she|he|they)\\s+(?:says?|asks?|echoes?|replies?|answers?|whispers?|shouts?)\\b[^.!?]*(?=[.!?]?$)`, "i"), "")
-                .replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g, "")
+                .replace(new RegExp(`,\\s*["'“”]?\\s*(?:${agentPattern}|she|he|they)\\s+(?:says?|asks?|echoes?|replies?|answers?|whispers?|shouts?)\\b[^.!?]*(?=[.!?]?$)`, "i"), "")
+                .replace(new RegExp(`^(?:${agentPattern}|she|he|they)\\s+(?:says?|asks?|replies?|answers?|whispers?)\\s*[,;:-]?\\s*`, "i"), "")
+                .replace(/^["'“”]+|["'“”]+$/g, "")
                 .replace(/\s+/g, " ")
                 .trim();
-            clean = normalizePrivateThoughtPerspective(agentName, clean, config);
-            clean = clean.replace(/\bmy voice is\b.*$/i, "").replace(/\bmy eyes are\b.*$/i, "").trim();
-            return ensureSentenceEnd(clean).slice(0, 180);
+            clean = normalizePrivateThoughtPerspective(agent, clean, config);
+            clean = clean
+                .replace(/\bmy voice is\b.*$/i, "")
+                .replace(/\bmy eyes are\b.*$/i, "")
+                .replace(/^my breath catches\b/i, "My body gives away what I am trying to hide")
+                .replace(/^my eyes keep flicking\b/i, "I keep measuring what this moment is becoming")
+                .trim();
+            if (new RegExp(`^${agentPattern}\\s+`, "i").test(clean)) {
+                clean = clean.replace(new RegExp(`^${agentPattern}\\s+`, "i"), "I ");
+            }
+            if (!/^(?:I|My|The|This|That|[A-Z][a-z]+)\b/.test(clean)) {
+                clean = `I cannot ignore that ${clean.charAt(0).toLowerCase()}${clean.slice(1)}`;
+            }
+            return ensureSentenceEnd(clean).slice(0, 190);
         };
 
-        const scored = sentences.map((sentence, order) => {
-            const lower = sentence.toLowerCase();
-            let score = 0;
-            if (agentLower && lower.includes(agentLower)) score += 35;
-            if (playerLower && lower.includes(playerLower)) score += 35;
-            if (memoryWeightPattern.test(sentence)) score += 45;
-            if (statePattern.test(sentence)) score += 15;
-            if (/["'\u201c\u201d]/.test(sentence)) score += 10;
-            if (/\?/.test(sentence) && /(?:love|truth|wife|memory|capsule)/i.test(sentence)) score += 15;
-            return { sentence, order, score };
-        }).sort((a, b) => (b.score - a.score) || (a.order - b.order));
-
-        const top = scored[0];
-        if (!top || top.score < 55) return null;
-
-        const keyTokens = [];
-        const tokenMap = [
-            ["coordinates", /coordinates?/i], ["vault", /vault|door|keypad/i], ["capsule", /capsule/i],
-            ["love", /love/i], ["wife", /wife/i], ["truth", /truth|proof|evidence/i],
-            ["betrayal", /betray|cheat|lied|lie/i], ["memory", /memory|remember|buried/i],
-            ["choice", /choice|choose/i], ["trap", /trap/i], ["promise", /promise/i]
-        ];
-        for (const pair of tokenMap) {
-            if (pair[1].test(top.sentence) || pair[1].test(source)) keyTokens.push(pair[0]);
-            if (keyTokens.length >= 2) break;
-        }
-        const key = keyTokens.length ? keyTokens.join("_") : `scene_truth_${hashText(top.sentence).toString(36).slice(0, 3)}`;
-        let event = cleanEventForThought(top.sentence);
-        if (!event || event.length < 12 || hasTemplateThoughtPrefix(event)) return null;
-        if (!/^\s*(?:I|My|The|This|Leo|Clara|[A-Z][a-z]+)\b/.test(event)) {
-            event = `I cannot ignore that ${event.charAt(0).toLowerCase()}${event.slice(1)}`;
-        }
+        const key = buildKey(top.sentence);
+        const event = cleanEventForThought(top.sentence);
+        if (!event || event.length < 12 || hasTemplateThoughtPrefix(event) || isCodeDebugLeakLine(event)) return null;
         return makeOp(key, event, top.score);
     };
 
@@ -2611,6 +2645,17 @@ ${compactMemoryContract}
             }
         }
 
+        const debugCleaned = stripCodeDebugLeaks(text);
+        if (debugCleaned.removed) {
+            text = debugCleaned.text;
+            MF.health.codeLeakSkips = (MF.health.codeLeakSkips || 0) + debugCleaned.removed;
+            if (text === "") {
+                bumpHealth("emptyOutputs");
+                text = "\u200B";
+                return;
+            }
+        }
+
         if (!agentName) {
             return;
         }
@@ -2868,8 +2913,10 @@ ${compactMemoryContract}
             }
 
             const uiLeakLine = isUiChromeLeakLine(line);
+            const codeDebugLeakLine = isCodeDebugLeakLine(line);
             const shouldDropLine = (
                 uiLeakLine ||
+                codeDebugLeakLine ||
                 lower.includes("strict output") ||
                 lower.includes("output format") ||
                 lower.includes("bracket operation") ||
@@ -2897,6 +2944,9 @@ ${compactMemoryContract}
                 removedUnsafeLine = true;
                 if (uiLeakLine) {
                     bumpHealth("uiLeakSkips");
+                }
+                if (codeDebugLeakLine) {
+                    bumpHealth("codeLeakSkips");
                 }
                 continue;
             }
