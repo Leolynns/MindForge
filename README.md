@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/mindforge.png" width="800" alt="MindForge">
+  <img src="mindforge.png" width="800" alt="MindForge">
 </p>
 
 # MindForge
