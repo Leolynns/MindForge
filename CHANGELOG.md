@@ -16,6 +16,21 @@
 - Expose front-memory delivery and protected-memory diagnostics. Context remains
   the default transport; live FrontMemory/cache behavior still needs Inspect.
 
+## Unreleased — Live empty-brain diagnostics
+
+- Make the active write task required when present (`required when this task
+  is present`) so smaller models are less likely to treat it as optional, and
+  strip the matching echoed task line from model output.
+- Widen name-trigger scanning to three times Lookback Turns so a recently named
+  primary NPC stays active while later turns use only pronouns.
+- Count delivered tasks that produce no usable memory operation as
+  `unfilledTasks` and surface the counter in `/mf status`.
+- Lower relationship-based auto-discovery from two narrative mentions to one so
+  beach/prose openings that lean on pronouns still register the main NPC.
+- Log caught script errors with a `MindForge <hook> error:` console line so
+  live Console Log can show failures that would otherwise restore the turn
+  silently.
+
 ## Context & Memory Update — 2026-09-23
 
 ### Opt-in startup

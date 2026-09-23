@@ -79,6 +79,8 @@ function MindForge(hook) {
             MF.health.errors = (MF.health.errors || 0) + 1;
             MF.health.lastError = String(error && error.message ? error.message : error).slice(0, 180);
         }
+        const errLine = `MindForge ${hook} error: ${String(error && error.message ? error.message : error).slice(0, 180)}`;
+        if (typeof console !== "undefined" && typeof console.log === "function") console.log(errLine);
         globalThis.text = output ? (output.text || "\u200B") : (originalText || "\u200B");
         return;
     } finally {
@@ -128,7 +130,7 @@ function MindForgeParseOutput(raw) {
         }
         if (brainBlock && (!clean || /^-\s+\S/.test(clean))) return removeMeta();
         brainBlock = false;
-        if (/^For [\w '-]+ only, after the story optionally append one line:/.test(clean) ||
+        if (/^For [\w '-]+ only, after the story (?:optionally )?append one line\b/.test(clean) ||
             /^Story: (?:first|second|third) person; player [\w '-]+\.$/.test(clean) ||
             clean === "Write all narration, dialogue and thoughts in English." ||
             /^Slots: relationship_\w+, goal_current, plan_next, secret_hidden; _state_current expires\.$/.test(clean) ||
@@ -1127,7 +1129,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         const totalMentions = candidates.reduce((sum, item) => sum + item.mentions, 0);
         const ranked = candidates.filter(item => item.primary || item.hint >= 80 ||
             (item.hint >= 50 && item.actions > 0) ||
-            (hook === "context" && ((item.relationship && item.mentions >= 2 && item.actions > 0) ||
+            (hook === "context" && ((item.relationship && item.mentions >= 1 && item.actions > 0) ||
                 (item.mentions >= 5 && item.actions >= 3 && item.mentions >= totalMentions * 0.55))))
             .sort((a, b) => Number(b.primary) - Number(a.primary) || b.score - a.score);
         const winner = ranked[0];
@@ -1799,7 +1801,10 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
 
         const lookback = config.lookback || 5;
         const actions = pendingInput ? [...history.slice(-lookback), { text: pendingInput }] : history;
-        const startIdx = Math.max(0, actions.length - lookback);
+        // Rank by the configured lookback, but scan a wider net so an NPC who
+        // was named recently stays active while later turns use only pronouns.
+        const scan = Math.min(actions.length, Math.max(lookback, lookback * 3));
+        const startIdx = Math.max(0, actions.length - scan);
         const foundAgents = [];
 
         for (let i = actions.length - 1; i >= startIdx; i--) {
@@ -2736,6 +2741,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                     outputMsg += `- Auto Doctor Repairs: ${MF.health.autoDoctorRepairs || 0}\n`;
                     outputMsg += `- Auto Doctor Compacts: ${MF.health.autoDoctorCompacts || 0}\n`;
                     outputMsg += `- Bootstrap Prompts: ${MF.health.bootstrapPrompts || 0}\n`;
+                    outputMsg += `- Unfilled Tasks: ${MF.health.unfilledTasks || 0}\n`;
                     outputMsg += `- Scenario Discoveries: ${MF.health.scenarioDiscoveries || 0}\n`;
                     outputMsg += `- World Writes: ${MF.health.worldWrites || 0}\n`;
                     outputMsg += `- World Compacts: ${MF.health.worldCompacts || 0}\n`;
@@ -3128,7 +3134,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         };
         const pov = config.pov === 1 ? "first person" : config.pov === 3 ? "third person" : "second person";
         const povRule = `Story: ${pov}; player ${config.player}.`;
-        const task = `For ${primaryAgent} only, after the story optionally append one line: [+specific_key: I ...] | [-old_key] | [=new_key: old_key]. One short grounded first-person thought; reuse keys, protect core_*. No labels/code. Omit memory before shortening the story.`;
+        const task = `For ${primaryAgent} only, after the story append one line (required when this task is present): [+specific_key: I ...] | [-old_key] | [=new_key: old_key]. One short grounded first-person thought; reuse keys, protect core_*. No labels/code. Omit memory before shortening the story.`;
         let blocks = [];
         let memoryChars = 0;
         let hasPrimaryMemory = false;
@@ -3354,6 +3360,9 @@ ${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(storedThought)};`;
         } else if (pendingOp) {
             bumpHealth("skippedCommits");
             bumpHealth("qualitySkips");
+        } else if (delivery && delivery.task) {
+            // Task reached the model but produced no usable memory operation.
+            bumpHealth("unfilledTasks");
         }
 
         if (text === "" && memoryOnlyOutput) {
