@@ -20,6 +20,12 @@ continues playing normally.
 
 - **Off by default:** prepares the configuration and main NPC name, then waits
   for the player to set `Enabled: true` before starting NPC memory.
+- **Direct setup answers:** reads recognized player/main-NPC name questions from
+  `state.placeholders`, even after the opening has left recent context.
+- **Host-aware protection:** respects valid `info.memoryLength` boundaries and
+  avoids empty Input/Output returns that the host rejects.
+- **Optional FrontMemory experiment:** can stage existing primary-NPC memories
+  in the host's shared memory field, with delivery checks and automatic cleanup.
 - **Smaller active prompts:** the matched three-memory test uses 768 added
   characters, versus approximately 2,320 in original Inner Self / KV Inner Self.
 - **Compact passive turns:** 247 characters for the same three memories. Read-only
@@ -83,9 +89,11 @@ MindForge requests English; it is not a translator or a language classifier.
 ### Automatic: one main NPC
 
 With **Scenario Auto-Discovery: true**, MindForge can fill one main-NPC slot
-when the configured cast is empty. It considers the opening and Plot Essentials
-together. Explicit main-NPC metadata takes priority; clear relationship cues
-and a strongly focused opening can also identify the main character.
+when the configured cast is empty. A single recognized main-NPC setup answer
+takes priority over text inference. Otherwise it considers the opening and Plot
+Essentials together, preferring explicit main-NPC metadata over relationship
+cues and opening focus. Existing registrations and a saved main NPC remain
+authoritative.
 
 Character cards contribute candidate names and aliases. They do **not** cause
 every character in the scenario to be registered. Translation copies and known
@@ -132,10 +140,24 @@ You can also explicitly mark a normal card by naming it `@Clara`, or by adding
 
 ### Player name
 
-`Player Name: auto` looks for resolved setup text such as `Your name is Alex`.
-If no name is detected, it uses `protagonist`. A manually entered name takes
-priority. Set it explicitly if your setup does not reveal the answer in text;
-the current detector does not read answers directly from `state.placeholders`.
+`Player Name: auto` first checks recognized answers in `state.placeholders`,
+then falls back to resolved setup text such as `Your name is Alex`. A manually
+entered name takes priority. If no usable name is found, it uses `protagonist`.
+
+Recognized question examples:
+
+| Purpose | Placeholder question |
+|---|---|
+| Player name | `What is your name?`, `Player name:`, `character.name` |
+| Numbered player name | `[1/5] Player character name:` |
+| Main NPC | `Main NPC name:`, `Primary NPC name:` |
+| Numbered main NPC | `[3/5] Important NPC name:` |
+
+Question matching ignores a leading `[n/m]` counter, case, and trailing `:` or
+`?`. Conflicting name answers, multiline descriptions, and unrelated questions
+such as a parent's name are not selected by array order. Use simple names for
+automatic discovery; set names manually when your question wording is different.
+Setup answers are read locally without another AI call or a new context block.
 
 ## How memory works
 
@@ -208,6 +230,7 @@ Enabled: false
 Player Name: auto
 POV (1=1st, 2=2nd, 3=3rd): 2
 Model Profile (Stable/Balanced/Full): Balanced
+Memory Transport (Context/FrontMemory): Context
 Scenario Auto-Discovery: true
 Thought Chance (0-100): 60
 Half Thought Chance: true
@@ -243,19 +266,73 @@ it if you want to prevent those requests too.
 
 ### Context and cache behavior
 
-When the host supplies `info.useCacheEfficient === true`, MindForge preserves
-the incoming context exactly and only appends what fits, with a 160-character
-margin. Stored primary memory and core identity take priority over requesting
-a new thought. A completely full cache prefix can leave no room for additions.
+With the default **Context** transport, when the host supplies
+`info.useCacheEfficient === true`, MindForge preserves the incoming context
+exactly and only appends what fits, with a 160-character margin. Stored primary
+memory and core identity take priority over requesting a new thought. A
+completely full cache prefix can leave no room for additions.
 
 Standard mode can trim a bounded amount of the oldest `Recent Story` to fit
 memory, while retaining instructions outside that section and the latest scene
 under normal budget pressure. Read-only turns omit editing keys and the longer
 maintenance instructions, keeping selected thought sentences and ownership.
 
+A valid `info.memoryLength` protects the host's leading memory from both trimming
+and label rewriting, including layouts without a `Recent Story:` heading.
+Recognizable shared front memory is also protected. If the protected host
+memory itself exceeds the reported limit, MindForge adds nothing and reports
+`hostOverBudget` instead of deleting protected text to make room.
+
+Empty Input and Output strings receive minimal nonempty placeholders because
+the [host API](https://help.aidungeon.com/scripting) rejects empty returns in those
+hooks. Empty Context has a different host fallback and is not filled by that
+guard. Ordinary disabled-mode text remains unchanged.
+
 `state.MindForge.contextStats` reports added/removed characters, memory budget,
 prefix preservation, compact mode, and task delivery. These are script-side
 diagnostics, not measurements of the host's actual cache-hit rate.
+
+### Optional FrontMemory transport
+
+For a creator-controlled experiment, change the config entry to:
+
+```text
+Memory Transport (Context/FrontMemory): FrontMemory
+```
+
+- **Input** stages a small block of already stored, nonvolatile primary-NPC
+  memories in `state.memory.frontMemory`. The first block is capped at 320
+  characters; later blocks at up to 600, subject to the last observed room.
+- **Context** verifies that the exact block is actually present, still belongs
+  to the active NPC, and matches current stored thoughts. Delivered memories
+  count toward the normal budget and are not injected a second time.
+- If the host omits the block, normal Context delivery is used. Recognizable
+  stale, changed, or truncated owned blocks are removed; this cleanup can change
+  the returned prefix even in cache mode.
+- Only memory data is staged. New memory-write instructions stay in the Context
+  hook and still require enough space and turn-bound authorization.
+- The temporary shared-field addition is released on the next hook. Existing
+  `state.memory.context`, `authorsNote`, and other scripts' front-memory text
+  are preserved. Disabling or switching transport also clears owned additions.
+
+**Context remains recommended.** FrontMemory is not free context, a guaranteed
+cache improvement, or a substitute for the write-task budget. Wrapper text can
+make it more expensive than direct delivery. The new path has been tested with
+simulated host assembly; actual AI Dungeon delivery must be checked with Inspect.
+
+Use `contextStats.frontMemoryStatus` (`delivered`, `not-in-context`, `stale`, etc.)
+and `frontMemoryChars` to see which path ran. `frontMemoryChars` measures the owned
+block already included in the input; `addedChars` measures subsequent additions,
+so an unusually small `addedChars` alone does not mean the memory was free.
+
+### Verify in AI Dungeon
+
+Use **Script Test** on the real Input, Context, and Output tabs, then **Play** and
+**Inspect** on an adventure you own. Check the assembled context, not just the
+visible story: the selected NPC memories should appear once, protected host
+instructions should remain, and no task should be expected when none was sent.
+Inspect data expires after 15 minutes. Local tests do not certify the host's
+16 MB sandbox limit, 2-second deadline, model behavior, or actual cache hits.
 
 ### Updating existing adventures
 
@@ -358,7 +435,7 @@ that does not establish superior long-term storytelling or retention.
 - Node 22.20.0; isolated hooks with JSON-persisted state and cards.
 - Three seeds: 1, 17, 42. Ten context cases in standard/cache modes.
 - Shared active settings: 100% thought chance, 30% allocation, five-action
-  lookback, second-person POV. MindForge profile: Balanced.
+  lookback, second-person POV. MindForge profile: Balanced; transport: Context.
 - Passive cases disable bootstrap and set thought chance to zero.
 - Optional world generation and Auto-Cards disabled; NGO/SAE bundles excluded.
 - Every implementation receives its own native operation syntax with matched

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — Host API integration
+
+- Read recognized player and main-NPC names from persistent `state.placeholders`
+  answers. Preserve manual configuration and reject ambiguous answer matches.
+- Keep automatic discovery limited to one main NPC, including disabled setup.
+- Guard empty Input and Output returns without changing ordinary disabled text.
+- Use valid `info.memoryLength` as a protected leading-context boundary and
+  preserve recognizable shared front memory while budgeting additions.
+- Add optional `Memory Transport: FrontMemory`: stage stored, nonvolatile
+  primary-NPC thoughts in Input, verify delivery in Context, and release only
+  the script-owned shared-field block. Keep write tasks out of persistent memory.
+- Fall back to direct Context delivery when staged memory is absent; discard
+  recognizable stale blocks without granting a memory-write authorization.
+- Expose front-memory delivery and protected-memory diagnostics. Context remains
+  the default transport; live FrontMemory/cache behavior still needs Inspect.
+
 ## Context & Memory Update — 2026-09-23
 
 ### Opt-in startup
