@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Command input formats
+
+- Accept `/mf` commands in all three AI Dungeon input formats: Do (`> You
+  /mf ...`), Say (`> You say "/mf ..."`), and raw story text. Previously only
+  raw text matched, so live Do/Say commands passed into the story instead.
+- Capture the last Input-hook text and whether it matched a command in the
+  MindForge Diagnostics report, so a missing or stale Input tab is visible.
+
 ## Unreleased — Restore proven Thought Forge task
 
 - Restore the May 2025 "MindForge Thought Forge" task wording after two live

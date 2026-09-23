@@ -404,6 +404,8 @@ read the paired report:
 - `output.cleaned`, parser counts, and `output.result`: what the script retained
   and why the memory operation was saved or rejected.
 - `output.matchesContext`: whether the two captured hook histories match.
+- `input`: the last Input-hook text and whether it matched a `/mf` command.
+  A missing `input` section means the Input tab did not run MindForge.
 
 This is local diagnostic data, not an NPC thought. The report has empty triggers
 and is not inserted into MindForge's memory context. Capture is off by default;
@@ -546,6 +548,12 @@ these commands are available for inspection or manual edits:
 /mf clear <agent>
 /mf debug [on|off]
 ```
+
+Commands work in **Do**, **Say**, and **Story** input modes. The command's
+result replaces that input as the action, and the AI responds to it; use
+**Undo** to remove the exchange from the story. If a command appears in the
+story as written text instead, the Input tab is missing or stale: its first
+line must call `MindForge("input");`.
 
 ## Credits and license
 

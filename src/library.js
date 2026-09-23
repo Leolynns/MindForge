@@ -19,6 +19,25 @@ function MindForgeIsEnabled(card = MindForgeConfigCard()) {
     return enabled;
 }
 
+// AI Dungeon delivers player input in three formats: Do ("> You /mf ..."),
+// Say ("> You say "/mf ...""), or raw story text. Normalize all of them so
+// commands work in any input mode.
+function MindForgeCommandText(text) {
+    const trimmed = String(text || "").trim();
+    const say = trimmed.match(/^>\s*You say\s+"([\s\S]*?)"\s*\.?$/i);
+    if (say) return say[1].replace(/\.$/, "").trim();
+    const doAction = trimmed.match(/^>\s*You\s+([\s\S]*)$/i);
+    if (doAction) return doAction[1].replace(/\.$/, "").trim();
+    const bare = trimmed.match(/^You\s+(\/[\s\S]*)$/);
+    if (bare) return bare[1].replace(/\.$/, "").trim();
+    return trimmed;
+}
+
+function MindForgeIsCommand(text) {
+    return /^\/(?:mf|brain|mindforge)\b/i.test(MindForgeCommandText(text));
+}
+
+
 // Opt-in local evidence only: this observes hook boundaries, not the model's
 // final request or any private reasoning the host does not expose to Output.
 function MindForgeDiagnostics(hook, originalText, parsed, error) {
@@ -41,6 +60,24 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
         }
         return;
     }
+    const snapshot = (value, limit) => {
+        const str = String(value || "");
+        const half = Math.floor(limit / 2);
+        return { chars: str.length, omittedChars: Math.max(0, str.length - limit),
+            head: str.length <= limit ? str : str.slice(0, half),
+            tail: str.length <= limit ? "" : str.slice(-(limit - half)) };
+    };
+    if (hook === "input") {
+        // Record what the Input hook received so command/format problems are
+        // visible in the diagnostics report. Never alters the input itself.
+        MF.diagnosticInput = {
+            actionCount: (globalThis.info || {}).actionCount ?? null,
+            raw: snapshot(originalText, 240),
+            returned: snapshot(globalThis.text, 240),
+            commandMatched: MindForgeIsCommand(originalText)
+        };
+        return;
+    }
     if (hook !== "context" && hook !== "output") return;
     const currentInfo = globalThis.info || {};
     const actions = Array.isArray(globalThis.history) ? history : [];
@@ -49,13 +86,6 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
         ? [currentInfo.actionCount, actions.slice(-30)] : actions.slice(-30));
     for (let i = 0; i < serialized.length; i++) hash = ((31 * hash) + serialized.charCodeAt(i)) | 0;
     const historyHash = hash.toString(16);
-    const snapshot = (value, limit) => {
-        const str = String(value || "");
-        const half = Math.floor(limit / 2);
-        return { chars: str.length, omittedChars: Math.max(0, str.length - limit),
-            head: str.length <= limit ? str : str.slice(0, half),
-            tail: str.length <= limit ? "" : str.slice(-(limit - half)) };
-    };
     const snapshots = [];
     let trace = MF.diagnosticTrace;
     if (hook === "context") {
@@ -66,7 +96,7 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
         const task = MF.contextStats?.task ? (structured?.[0].trimEnd() ||
             returned.split("\n").findLast(line => /^For [\w '-]+ only,/.test(line)) || "") : "";
         trace = {
-            version: 1, revision: "structured-task-trace-v2", context: {
+            version: 1, revision: "structured-task-trace-v2", input: MF.diagnosticInput || null, context: {
                 actionCount: currentInfo.actionCount ?? null, historyHash,
                 agent: MF.delivery?.agent || "", taskIncluded: MF.contextStats?.task === true,
                 taskOrder: MF.contextStats?.taskOrder || "none", maxChars: currentInfo.maxChars ?? null,
@@ -86,7 +116,7 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
     } else {
         if (trace?.version !== 1 || trace.output) {
             if (trace?.output?.historyHash === historyHash) return;
-            trace = { version: 1, revision: "structured-task-trace-v2", context: null, output: null };
+            trace = { version: 1, revision: "structured-task-trace-v2", input: MF.diagnosticInput || null, context: null, output: null };
         }
         trace.output = {
             actionCount: currentInfo.actionCount ?? null, historyHash,
@@ -99,8 +129,8 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
             error: error ? String(error.message || error).slice(0, 180) : null
         };
     }
-    for (const value of [trace.context?.task, trace.context?.returnedTail, trace.context?.inputTail,
-        trace.output?.raw, trace.output?.cleaned]) if (value) snapshots.push(value);
+    for (const value of [trace.input?.raw, trace.input?.returned, trace.context?.task, trace.context?.returnedTail,
+        trace.context?.inputTail, trace.output?.raw, trace.output?.cleaned]) if (value) snapshots.push(value);
     // Bound serialized size too: control characters expand when escaped as JSON.
     let notes = JSON.stringify(trace, null, 2);
     while (notes.length > 9000) {
@@ -2874,8 +2904,8 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
     // 1. INPUT HOOK: Handle player OOC commands
     if (hook === "input") {
         if (text) {
-            const cmd = text.trim();
-            if (cmd.startsWith("/mf") || cmd.startsWith("/brain") || cmd.startsWith("/mindforge")) {
+            const cmd = MindForgeCommandText(text);
+            if (MindForgeIsCommand(text)) {
                 const parts = cmd.split(" ").map(p => p.trim()).filter(Boolean);
                 const sub = parts[1] ? parts[1].toLowerCase() : "";
                 let outputMsg = "";
