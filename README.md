@@ -384,6 +384,30 @@ are also recognized beside story prose. An actual model reasoning/“thinking”
 display is not itself a memory operation; only text available to the Output
 hook can be processed.
 
+### Capture an empty-brain turn
+
+Set `Diagnostics: true` in **Configure MindForge → Entry**, then generate one
+new turn. Open **MindForge Diagnostics → Notes** to read the paired report:
+
+- `context.task` and `context.returnedTail`: the task and end of the context
+  returned by MindForge, with `taskIncluded`, `taskOrder`, and the turn hash.
+- `output.raw`: text received by MindForge's Output hook **before cleanup**.
+- `output.cleaned`, parser counts, and `output.result`: what the script retained
+  and why the memory operation was saved or rejected.
+- `output.matchesContext`: whether the two captured hook histories match.
+
+This is local diagnostic data, not an NPC thought. The report has empty triggers
+and is not inserted into MindForge's memory context. Capture is off by default;
+set `Diagnostics: false` (or disable MindForge) to clear the stored report on
+the next hook. Only the latest pair is kept; repeated hooks preserve the first
+completed pair for that turn. Copy the report before generating another turn.
+
+Text is bounded and `omittedChars` identifies omitted portions. Long Output
+samples retain a head and tail; the serialized report is capped at 9,000
+characters. The report observes **MindForge's hook boundaries**, not the host's
+final model request, model settings, or any reasoning not exposed to Output.
+Use Inspect to check host processing or other scripts that run afterwards.
+
 ### Updating existing adventures
 
 Replace all four script tabs together. Existing configuration entries remain

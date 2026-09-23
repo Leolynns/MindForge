@@ -1,7 +1,7 @@
 /**
  * MindForge Core Library
  * A lightweight, context-efficient, high-quality agentic NPC memory script for AI Dungeon.
- * Opt-in NPC memory with story-first output and bounded context use.
+ * Opt-in NPC memory with continuous storytelling and bounded context use.
  */
 function MindForgeConfigCard() {
     return Array.isArray(globalThis.storyCards) ? storyCards.find(card => card && (
@@ -17,6 +17,108 @@ function MindForgeIsEnabled(card = MindForgeConfigCard()) {
         if (match) enabled = match[1].toLowerCase() === "true";
     }
     return enabled;
+}
+
+// Opt-in local evidence only: this observes hook boundaries, not the model's
+// final request or any private reasoning the host does not expose to Output.
+function MindForgeDiagnostics(hook, originalText, parsed, error) {
+    const MF = globalThis.state?.MindForge;
+    if (!MF || typeof MF !== "object" || !Array.isArray(globalThis.storyCards)) return;
+    const config = MindForgeConfigCard();
+    let enabled = false;
+    for (const line of String(config?.entry || "").split("\n")) {
+        const match = line.match(/^\s*Diagnostics\s*:\s*(.*?)\s*$/i);
+        if (match) enabled = match[1].toLowerCase() === "true";
+    }
+    const marker = "// MindForge Diagnostics v1\n";
+    let card = storyCards.find(item => item && String(item.entry || "").startsWith(marker));
+    if (!enabled || !MindForgeIsEnabled(config)) {
+        delete MF.diagnosticTrace;
+        if (card) {
+            card.keys = "";
+            card.entry = marker + "Capture off; stored trace cleared. Enable Diagnostics in Configure MindForge to capture one turn.";
+            card.description = "";
+        }
+        return;
+    }
+    if (hook !== "context" && hook !== "output") return;
+    const currentInfo = globalThis.info || {};
+    const actions = Array.isArray(globalThis.history) ? history : [];
+    let hash = 0;
+    const serialized = JSON.stringify(Number.isSafeInteger(currentInfo.actionCount)
+        ? [currentInfo.actionCount, actions.slice(-30)] : actions.slice(-30));
+    for (let i = 0; i < serialized.length; i++) hash = ((31 * hash) + serialized.charCodeAt(i)) | 0;
+    const historyHash = hash.toString(16);
+    const snapshot = (value, limit) => {
+        const str = String(value || "");
+        const half = Math.floor(limit / 2);
+        return { chars: str.length, omittedChars: Math.max(0, str.length - limit),
+            head: str.length <= limit ? str : str.slice(0, half),
+            tail: str.length <= limit ? "" : str.slice(-(limit - half)) };
+    };
+    const snapshots = [];
+    let trace = MF.diagnosticTrace;
+    if (hook === "context") {
+        // Repeated Context/Output calls must not erase the first completed pair.
+        if (trace?.version === 1 && trace.context?.historyHash === historyHash && trace.output) return;
+        const returned = String(globalThis.text || "");
+        const task = returned.split("\n").findLast(line => /^For [\w '-]+ only,/.test(line)) || "";
+        trace = {
+            version: 1, revision: "memory-first-trace-v1", context: {
+                actionCount: currentInfo.actionCount ?? null, historyHash,
+                agent: MF.delivery?.agent || "", taskIncluded: MF.contextStats?.task === true,
+                taskOrder: MF.contextStats?.taskOrder || "none", maxChars: currentInfo.maxChars ?? null,
+                useCacheEfficient: currentInfo.useCacheEfficient === true,
+                returnedChars: returned.length,
+                task: snapshot(task, 1400),
+                returnedTail: snapshot(returned.slice(-1400), 1400),
+                inputTail: snapshot(originalText.slice(-600), 600),
+                error: error ? String(error.message || error).slice(0, 180) : null
+            }, output: null
+        };
+        trace.context.returnedTail.omittedChars = Math.max(0, returned.length - 1400);
+        trace.context.returnedTail.chars = returned.length;
+        trace.context.inputTail.omittedChars = Math.max(0, originalText.length - 600);
+        trace.context.inputTail.chars = originalText.length;
+    } else {
+        if (trace?.version !== 1 || trace.output) {
+            if (trace?.output?.historyHash === historyHash) return;
+            trace = { version: 1, revision: "memory-first-trace-v1", context: null, output: null };
+        }
+        trace.output = {
+            actionCount: currentInfo.actionCount ?? null, historyHash,
+            matchesContext: Boolean(trace.context && trace.context.historyHash === historyHash),
+            raw: snapshot(originalText, 2600), cleaned: snapshot(globalThis.text, 600),
+            parsedOperations: parsed?.operations?.length || 0, removed: parsed?.removed || 0,
+            truncated: parsed?.truncated || 0, scaffolding: parsed?.scaffolding || 0,
+            code: parsed?.code || 0,
+            result: error ? "runtime-error" : MF.lastMemoryResult?.reason || "no-result",
+            error: error ? String(error.message || error).slice(0, 180) : null
+        };
+    }
+    for (const value of [trace.context?.task, trace.context?.returnedTail, trace.context?.inputTail,
+        trace.output?.raw, trace.output?.cleaned]) if (value) snapshots.push(value);
+    // Bound serialized size too: control characters expand when escaped as JSON.
+    let notes = JSON.stringify(trace, null, 2);
+    while (notes.length > 9000) {
+        const largest = snapshots.sort((a, b) => b.head.length + b.tail.length - a.head.length - a.tail.length)[0];
+        if (!largest || largest.head.length + largest.tail.length < 2) break;
+        largest.head = largest.head.slice(0, Math.floor(largest.head.length / 2));
+        largest.tail = largest.tail.slice(Math.ceil(largest.tail.length / 2));
+        largest.omittedChars = largest.chars - largest.head.length - largest.tail.length;
+        notes = JSON.stringify(trace, null, 2);
+    }
+    if (!card) {
+        const keys = "__mindforge_diagnostics_v1__";
+        addStoryCard(keys, marker, "class", "MindForge Diagnostics", "", { returnCard: true });
+        card = storyCards.find(item => item && item.keys === keys);
+        if (!card) throw new Error("Could not create diagnostics card");
+    }
+    card.keys = ""; // Never trigger this report as story lore.
+    card.entry = marker + `Open Notes for the latest hook trace. ${trace.output ? "Output captured: " + trace.output.result : "Context captured; awaiting Output"}.\n` +
+        "Local script-boundary data only; not proof of what the model received. Disable Diagnostics to clear.";
+    card.description = notes;
+    MF.diagnosticTrace = trace;
 }
 
 // Locate only the block leased by this script. Other frontMemory text belongs
@@ -64,12 +166,14 @@ function MindForge(hook) {
     const ownsOutput = hook === "output" && (MindForgeIsEnabled() || (delivery?.task && !delivery.consumed) ||
         (hasPriorFront && priorFront.delivered && !priorFront.outputHandled));
     let output = null;
+    let hookError = null;
     try {
         if (ownsOutput) output = MindForgeParseOutput(originalText);
         const sharedFront = globalThis.state?.memory?.frontMemory;
         const frontLease = MindForgeReleaseFrontMemory();
         return MindForgeCore(hook, output, frontLease, sharedFront);
     } catch (error) {
+        hookError = error;
         if (globalThis.state && typeof state === "object" && !Array.isArray(state)) {
             const MF = state.MindForge = state.MindForge && typeof state.MindForge === "object" && !Array.isArray(state.MindForge) ? state.MindForge : {};
             MF.agent = "";
@@ -89,6 +193,11 @@ function MindForge(hook) {
         // means "use the host context" and must retain that distinct behavior.
         if ((hook === "input" || hook === "output") && globalThis.text === "") {
             globalThis.text = hook === "input" ? " " : "\u200B";
+        }
+        // Evidence collection must never replace story output or mask the hook error.
+        try { MindForgeDiagnostics(hook, originalText, output, hookError); }
+        catch (error) {
+            if (globalThis.state?.MindForge?.health) state.MindForge.health.lastDiagnosticError = String(error.message || error).slice(0, 180);
         }
     }
 }
@@ -673,6 +782,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         "POV (1=1st, 2=2nd, 3=3rd): 2",
         "Model Profile (Stable/Balanced/Full): Balanced",
         "Memory Transport (Context/FrontMemory): Context",
+        "Diagnostics: false",
         "Scenario Auto-Discovery: true",
         "Thought Chance (0-100): 60",
         "Half Thought Chance: true",
@@ -818,6 +928,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             addIfMissing("POV (1=1st, 2=2nd, 3=3rd): 2", key => key.includes("pov"));
             addIfMissing("Model Profile (Stable/Balanced/Full): Balanced", key => key.includes("model profile"));
             addIfMissing("Memory Transport (Context/FrontMemory): Context", key => key.includes("memory transport"));
+            addIfMissing("Diagnostics: false", key => key === "diagnostics");
             addIfMissing("Scenario Auto-Discovery: true", key => key.includes("scenario auto") || key.includes("auto-discovery") || key.includes("auto discovery"));
             addIfMissing("Thought Chance (0-100): 60", key => key.includes("thought chance") && !key.includes("half"));
             addIfMissing("Half Thought Chance: true", key => key.includes("half thought chance") || key.includes("half chance"));
@@ -1431,6 +1542,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             json: false,
             profile: "balanced",
             transport: "context",
+            diagnostics: false,
             scenarioDiscovery: true,
             guardBuffer: 600,
             maxAgents: 2,
@@ -1476,6 +1588,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             else if (key.includes("pov")) config.pov = clampInt(val, 2, 1, 3);
             else if (key.includes("model profile")) config.profile = ["stable", "balanced", "full"].includes(val.toLowerCase()) ? val.toLowerCase() : "balanced";
             else if (key.includes("memory transport")) config.transport = val.toLowerCase() === "frontmemory" ? "frontmemory" : "context";
+            else if (key === "diagnostics") config.diagnostics = val.toLowerCase() === "true";
             else if (key.includes("scenario auto") || key.includes("auto-discovery") || key.includes("auto discovery")) config.scenarioDiscovery = val.toLowerCase() !== "false";
             else if (key.includes("thought chance") && !key.includes("half")) config.chance = clampInt(val, 60, 0, 100);
             else if (key.includes("half thought chance") || key.includes("half chance")) config.halfChance = val.toLowerCase() === "true";
@@ -2725,6 +2838,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                     outputMsg += `- Language: English\n`;
                     outputMsg += `- Model Profile: ${config.profile}\n`;
                     outputMsg += `- Memory Transport: ${config.transport}\n`;
+                    outputMsg += `- Diagnostics: ${config.diagnostics} (MindForge Diagnostics card)\n`;
                     outputMsg += `- Runtime Profile: ${config.runtimeProfile || config.profile}\n`;
                     outputMsg += `- Scenario Auto-Discovery: ${config.scenarioDiscovery}\n`;
                     outputMsg += `- Thought Chance: ${config.chance}%\n`;

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Paired diagnostic capture
+
+- Add opt-in `Diagnostics: false` configuration and a separate MindForge
+  Diagnostics card with empty triggers.
+- Pair the returned Context task/tail with pre-cleanup Output text, parser
+  counts, turn-match information, errors, and the memory result.
+- Bound the serialized report to 9,000 characters, report omitted text, preserve
+  the first completed pair across repeated hooks, and clear capture when disabled.
+- Keep diagnostic failures separate from normal story and memory processing.
+- This provides local hook evidence for empty-brain diagnosis; it does not
+  establish live model delivery or instruction compliance.
+
 ## Unreleased — Memory-first task delivery
 
 - Request one private memory operation before the story continuation, matching
