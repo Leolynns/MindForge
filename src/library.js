@@ -163,7 +163,7 @@ function MindForgeParseOutput(raw) {
     const signedHeader = new RegExp(`^([+=-])[ \\t]*(${keyPattern})[ \\t]*(?:([:=])[ \\t]*|(?=[\\])}\\r\\n]|$))`);
     const assignHeader = new RegExp(`^(${keyPattern})[ \\t]*([=:])[ \\t]*`);
     const deleteHeader = /^(?:delete|remove|forget)[ \t]+([a-z_][a-z0-9_]*(?:\(\d{1,3}\))?)[ \t]*(?=[\])}\r\n]|$)/;
-    const cleanValue = value => value.trim().replace(/^([`"'“‘])([\s\S]*)[`"'”’]$/, "$2").trim();
+    const cleanValue = value => value.trim().replace(/^([`"'“‘])([\s\S]*)[`"'”’]$/, "$2").replace(/\s+/g, " ").trim();
     const readHeader = (value, boundary, marked = false) => {
         const label = value.match(/^(?:[-=]+\s*)?memory[ _-]?operation[ \t]*[:=][ \t]*/i);
         if (label) {
@@ -175,12 +175,17 @@ function MindForgeParseOutput(raw) {
             kind: signed[1] === "+" ? "set" : signed[1] === "-" ? "delete" : "rename",
             key: signed[2], length: signed[0].length, explicit: true
         };
-        if (!boundary && !marked) return null;
+        // An inline legacy operation needs a specific key and a quoted private
+        // thought. Do not reinterpret ordinary equations or narrative asides.
+        if (!boundary && !marked) {
+            const inline = value.match(/^([a-z][a-z0-9]*_[a-z0-9_]+)[ \t]*=[ \t]*[`"“'](?:I|My)\b/);
+            if (!inline) return null;
+        }
         const del = value.match(deleteHeader);
         if (del) return { kind: "delete", key: del[1], length: del[0].length, explicit: true };
         const assign = value.match(assignHeader);
         if (!assign || !/^[a-z_][a-z0-9_ \t()]*$/.test(assign[1]) || assign[1].trim().length < 2) return null;
-        const rest = value.slice(assign[0].length);
+        const rest = value.slice(assign[0].length).trimStart();
         if (assign[2] === ":" && !marked && (!assign[1].includes("_") || !/^[`"']?(?:I|My)\b/.test(rest))) return null;
         if (!marked && !/[A-Za-z]/.test(rest)) return null;
         return { kind: "assign", key: assign[1], length: assign[0].length, explicit: marked };
@@ -227,16 +232,22 @@ function MindForgeParseOutput(raw) {
             }
             continue;
         }
-        const valueStart = restStart + leading + header.length;
+        const headerEnd = restStart + leading + header.length;
+        const valueStart = headerEnd + source.slice(headerEnd).match(/^\s*/)[0].length;
         const newline = source.indexOf("\n", valueStart);
         const lineEnd = newline === -1 ? source.length : newline;
+        // A closed operation may wrap across lines. Keep recovery bounded, and
+        // stop at a new operation/paragraph instead of borrowing its delimiter.
+        const scanEnd = Math.min(source.length, valueStart + 600);
         let close = -1;
         let fallbackClose = -1;
         const first = source[valueStart];
         let quote = ({ '`': '`', '"': '"', "'": "'", '“': '”', '‘': '’' })[first] || "";
         const nested = [];
-        for (let i = valueStart; i < lineEnd; i++) {
+        for (let i = valueStart; i < scanEnd; i++) {
             const char = source[i];
+            if (char === "\n" && /^[ \t\r]*\n/.test(source.slice(i + 1))) break;
+            if (/[\[({]/.test(char) && readHeader(source.slice(i + 1, i + 351).trimStart(), true)) break;
             if (quote) {
                 if (i > valueStart && char === quote && source[i - 1] !== "\\" &&
                     (quote !== "'" || /[\s\])}]/.test(source[i + 1] || " "))) quote = "";
@@ -249,7 +260,7 @@ function MindForgeParseOutput(raw) {
                 else { close = i; break; }
             }
         }
-        if (close === -1 && quote && fallbackClose !== -1) close = fallbackClose;
+        if (close === -1 && quote && fallbackClose !== -1 && fallbackClose < lineEnd) close = fallbackClose;
         if (close !== -1) {
             addOperation(header, source.slice(valueStart, close), start, close + 1, true, opening[0] !== ({ ']': '[', ')': '(', '}': '{' })[source[close]]);
             opens.lastIndex = close + 1;
@@ -905,6 +916,15 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             );
         }
         return repairBrainCard(card, cleanAgent);
+    };
+
+    // Entry is the player-facing operation log; Notes remain the source of truth.
+    // Replace one owned status line instead of accumulating a log on every miss.
+    const setBrainStatus = (card, message) => {
+        if (!card) return;
+        const entry = String(card.entry || "").split("\n")
+            .filter(line => !line.startsWith("// MindForge Memory Status:")).join("\n").trim();
+        card.entry = `// MindForge Memory Status: ${message}\n${entry}`;
     };
 
     const cleanDiscoveredName = (value = "") => {
@@ -1800,10 +1820,10 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         };
 
         const lookback = config.lookback || 5;
-        const actions = pendingInput ? [...history.slice(-lookback), { text: pendingInput }] : history;
-        // Rank by the configured lookback, but scan a wider net so an NPC who
-        // was named recently stays active while later turns use only pronouns.
-        const scan = Math.min(actions.length, Math.max(lookback, lookback * 3));
+        // Use the same bounded name window in Input and Context. The pending
+        // player action takes one slot, just as it does once added to history.
+        const scan = lookback * 3;
+        const actions = pendingInput ? [...history.slice(-(scan - 1)), { text: pendingInput }] : history;
         const startIdx = Math.max(0, actions.length - scan);
         const foundAgents = [];
 
@@ -2751,6 +2771,12 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                     outputMsg += `- Brain Repairs: ${MF.health.brainRepairs || 0}\n`;
                     outputMsg += `- Adaptive Shifts: ${MF.health.adaptiveShifts || 0}\n`;
                     outputMsg += `- Runtime Errors: ${MF.health.errors || 0}\n\n`;
+                    if (MF.lastMemoryResult) {
+                        const last = MF.lastMemoryResult;
+                        outputMsg += `Last Memory Result:\n- NPC: ${last.agent || "none"}\n- Result: ${last.reason}\n`;
+                        outputMsg += `- Parsed Operations: ${last.parsedOperations}\n- Stored Thoughts: ${last.storedKeys}\n`;
+                        outputMsg += `- Turn Match: ${last.hashMatches}\n- Read thoughts in the brain card's Notes/Description.\n\n`;
+                    }
                     outputMsg += `NPC Agents:\n`;
 
                     if (config.agents.length === 0) {
@@ -3209,6 +3235,9 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         addPart(getWorldContext(sceneText, config, base, Math.min(600, suffixRoom - used - 2)));
         MF.delivery = { hash: turnHash, agent: primaryAgent, task: Boolean(taskFits), consumed: false };
         finishContext(parts, Boolean(taskFits), memoryChars, !taskFits);
+        setBrainStatus(getBrainCard(primaryAgent), taskFits
+            ? "Task included; awaiting Output. Read stored thoughts in Notes/Description."
+            : "Read-only turn; no write task included. Read stored thoughts in Notes/Description.");
 
         return;
     }
@@ -3238,9 +3267,35 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         const authorized = agentName && !isRetry && delivery && (
             delivery.task && delivery.hash === currentHash && delivery.agent === agentName && !delivery.consumed
         );
+        const consumed = Boolean(delivery?.consumed);
+        const resultMessages = {
+            saved: "Saved", "no-operation": "No memory operation returned",
+            "incomplete-operation": "Incomplete operation; not saved", "invalid-operation": "Invalid operation; not saved",
+            "scaffolding-only": "Only prompt/code wrappers found; not saved", "quality-rejected": "Quality filter rejected the thought",
+            duplicate: "Duplicate thought; existing Notes retained", "core-protected": "Core memory protected",
+            "no-change": "Operation made no change", "no-narrative": "Output was not usable story or a complete memory-only reply",
+            "turn-mismatch": "Context/Output turn mismatch; not saved", "no-task": "No write task was included",
+            "already-consumed": "Task already consumed; not saved again", retry: "Retry; not saved again",
+            "agent-mismatch": "Task/NPC mismatch; not saved"
+        };
+        const recordResult = (reason, card = null) => {
+            const target = agentName || delivery?.agent || "";
+            card ||= storyCards.find(item => parseBrainMeta(item)?.agent === target);
+            const storedKeys = Object.keys(deserializeBrain(card?.description || "")).length;
+            MF.lastMemoryResult = {
+                agent: target, reason, turn: currentTurn, authorized: Boolean(authorized),
+                hashMatches: Boolean(delivery && delivery.hash === currentHash),
+                parsedOperations: parsed.operations.length, truncated: parsed.truncated,
+                key: String(parsed.operations[0]?.key || "").slice(0, 64),
+                cardId: card?.id ?? null, storedKeys, notesChars: card?.description?.length || 0
+            };
+            setBrainStatus(card, `${resultMessages[reason] || reason}. Stored thoughts: ${storedKeys}. Read Notes/Description.`);
+        };
         if (delivery) delivery.consumed = true;
         if (!authorized) {
             if (parsed.operations.length) bumpHealth(isRetry ? "retrySkips" : "undeliveredSkips");
+            recordResult(consumed ? "already-consumed" : isRetry ? "retry" : !delivery?.task ? "no-task"
+                : delivery.hash !== currentHash ? "turn-mismatch" : "agent-mismatch");
             if (!text) { bumpHealth("emptyOutputs"); text = "\u200B"; }
             return;
         }
@@ -3249,6 +3304,8 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         const brain = deserializeBrain(brainCard.description);
         const candidate = parsed.operations[0];
         let pendingOp = null;
+        let resultReason = parsed.truncated ? "incomplete-operation" : parsed.removed ? "invalid-operation"
+            : parsed.scaffolding ? "scaffolding-only" : "no-operation";
         if (candidate) {
             let key = formatMemoryKey(candidate.key);
             const val = cleanOperationValueLiteral(candidate.val);
@@ -3287,9 +3344,11 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                     bumpHealth("thoughtQualitySkips");
                     bumpHealth("qualitySkips");
                     commitSet = false;
+                    resultReason = "quality-rejected";
                 } else if (isDuplicateThought(brain, setOp.key, setOp.val, agentName)) {
                     bumpHealth("duplicateSkips");
                     commitSet = false;
+                    resultReason = "duplicate";
                 }
 
                 if (!commitSet) {
@@ -3312,6 +3371,7 @@ ${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(storedThought)};`;
                 }
             } else if (pendingOp.type === "delete") {
                 if (isCoreKey(pendingOp.key)) {
+                    resultReason = "core-protected";
                     bumpHealth("coreSkips");
                     MF.ops--;
                 } else {
@@ -3321,13 +3381,16 @@ ${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(storedThought)};`;
                     if (deleted) {
                         logMsg = `// operation ${MF.ops}\ndelete ${agentName.toLowerCase()}.${pendingOp.key};`;
                     } else {
+                        resultReason = "no-change";
                         MF.ops--;
                     }
                 }
             } else if (pendingOp.type === "rename") {
                 if (pendingOp.oldKey === pendingOp.key) {
+                    resultReason = "no-change";
                     MF.ops--;
                 } else if (isCoreKey(pendingOp.oldKey) || isCoreKey(pendingOp.key)) {
+                    resultReason = "core-protected";
                     bumpHealth("coreSkips");
                     MF.ops--;
                 } else {
@@ -3356,14 +3419,17 @@ ${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(storedThought)};`;
                     brainCard.entry = "// Bounded Operation Log:\n" + brainCard.entry.split("\n\n").slice(-10).join("\n\n");
                 }
                 brainCard.description = serializeBrain(brain, agentName);
+                resultReason = "saved";
             }
         } else if (pendingOp) {
+            resultReason = "no-narrative";
             bumpHealth("skippedCommits");
             bumpHealth("qualitySkips");
         } else if (delivery && delivery.task) {
-            // Task reached the model but produced no usable memory operation.
+            // Context included a task, but Output supplied no usable operation.
             bumpHealth("unfilledTasks");
         }
+        recordResult(resultReason, brainCard);
 
         if (text === "" && memoryOnlyOutput) {
             text = "...";

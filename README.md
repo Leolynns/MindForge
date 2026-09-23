@@ -334,6 +334,45 @@ instructions should remain, and no task should be expected when none was sent.
 Inspect data expires after 15 minutes. Local tests do not certify the host's
 16 MB sandbox limit, 2-second deadline, model behavior, or actual cache hits.
 
+If a brain stays empty, compare the same turn's Context, raw model output, and
+brain-card Notes/Description. `/mf status` reports **Unfilled Tasks** when Context
+included an authorized task but Output had no usable operation or fallback.
+This can include unfinished operations; it does not prove that the model saw
+or deliberately ignored the instruction. Quality and duplicate rejections have
+separate counters. A caught error is logged as `MindForge <hook> error:`, but an
+empty Console Log alone does not establish that all hooks ran successfully.
+The task wording requests a memory operation; model compliance still requires
+live verification.
+
+**Open the generated `Avery Brain` card**, rather than the scenario's ordinary
+`Avery` character card (substitute your NPC's name). As in Inner Self, **Entry**
+shows recent operations and **Notes/Description** stores the current thoughts.
+The active-card symbol means the NPC was selected, not that a thought was saved.
+
+The first Entry line, `// MindForge Memory Status:`, now distinguishes:
+
+- `Task included; awaiting Output` — Context included a write task; no Output
+  result has been recorded yet.
+- `Saved. Stored thoughts: N` — Output wrote the brain card's Notes/Description.
+- `No memory operation returned` or `Incomplete operation; not saved` — Output
+  had no complete usable operation.
+- `Quality filter rejected the thought`, `Duplicate thought`, or
+  `Context/Output turn mismatch; not saved` — the operation did not produce a
+  new stored thought, with the reason shown directly on the card.
+- `Read-only turn; no write task included` — the current Context did not request
+  a write.
+
+This status replaces one line; it is not stored as an NPC thought. `/mf status`
+also shows **Last Memory Result**, available in Inspect as
+`state.MindForge.lastMemoryResult`. `Saved` records the script's card update;
+check the adventure card after the turn to confirm live host persistence.
+
+Completed memory operations can wrap onto multiple lines. Legacy Inner Self
+assignments with a specific underscored key and a quoted first-person thought
+are also recognized beside story prose. An actual model reasoning/“thinking”
+display is not itself a memory operation; only text available to the Output
+hook can be processed.
+
 ### Updating existing adventures
 
 Replace all four script tabs together. Existing configuration entries remain

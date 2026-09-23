@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — Brain write compatibility and visible status
+
+- Compare card storage with Inner Self, KV Inner Self, and Optimized Context
+  Inner Self: current thoughts belong in Notes/Description, recent operations
+  in Entry, on the generated Brain card.
+- Parse completed memory operations across wrapped lines; previously they were
+  incorrectly rejected as truncated and could leave their continuation visible.
+- Recognize narrowly identified inline legacy assignments with specific keys
+  and quoted first-person values, preserving ordinary equations and asides.
+- Display a replaceable `MindForge Memory Status` line on the brain card for
+  pending, saved, missing/incomplete, rejected, duplicate, and mismatched turns.
+- Expose the latest result, card ID, stored-key count, and turn-match diagnostic
+  through `state.MindForge.lastMemoryResult` and `/mf status`.
+- Verify new-card writes, visible operation logs, persisted Notes, and next-turn
+  memory retrieval with index-returning and extended card APIs in local tests.
+
 ## Unreleased — Host API integration
 
 - Read recognized player and main-NPC names from persistent `state.placeholders`
@@ -18,13 +34,17 @@
 
 ## Unreleased — Live empty-brain diagnostics
 
-- Make the active write task required when present (`required when this task
-  is present`) so smaller models are less likely to treat it as optional, and
-  strip the matching echoed task line from model output.
+- Request a memory operation explicitly when an active task is present and
+  strip the matching echoed task line. Live model compliance is not established
+  by the local tests.
 - Widen name-trigger scanning to three times Lookback Turns so a recently named
   primary NPC stays active while later turns use only pronouns.
+- Align FrontMemory Input preparation with the Context name window, counting
+  the pending player action as one slot. Test both sides of the window boundary.
 - Count delivered tasks that produce no usable memory operation as
   `unfilledTasks` and surface the counter in `/mf status`.
+- Clarify that unfilled tasks include unfinished operations and do not establish
+  whether a live model saw or ignored the task; log silence is not a health check.
 - Lower relationship-based auto-discovery from two narrative mentions to one so
   beach/prose openings that lean on pronouns still register the main NPC.
 - Log caught script errors with a `MindForge <hook> error:` console line so
