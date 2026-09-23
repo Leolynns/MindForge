@@ -92,7 +92,7 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
         // Repeated Context/Output calls must not erase the first completed pair.
         if (trace?.version === 1 && trace.context?.historyHash === historyHash && trace.output) return;
         const returned = String(globalThis.text || "");
-        const structured = /<SYSTEM>\r?\n(?:# MindForge memory task v[23]|# MindForge Thought Forge: [\w '-]+)\r?\n[\s\S]*?<\/SYSTEM>\s*$/.exec(returned);
+        const structured = /<SYSTEM>\r?\n(?:# MindForge memory task v[23]|# MindForge Thought Forge: [\w '-]+|# STRICT OUTPUT FORMAT)\r?\n[\s\S]*?<\/SYSTEM>\s*$/.exec(returned);
         const task = MF.contextStats?.task ? (structured?.[0].trimEnd() ||
             returned.split("\n").findLast(line => /^For [\w '-]+ only,/.test(line)) || "") : "";
         trace = {
@@ -103,7 +103,7 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
                 taskFormat: MF.contextStats?.taskFormat || "none",
                 useCacheEfficient: currentInfo.useCacheEfficient === true,
                 returnedChars: returned.length,
-                task: snapshot(task, 1400),
+                task: snapshot(task, 2600),
                 returnedTail: snapshot(returned.slice(-1400), 1400),
                 inputTail: snapshot(originalText.slice(-600), 600),
                 error: error ? String(error.message || error).slice(0, 180) : null
@@ -318,7 +318,40 @@ function MindForgeParseOutput(raw) {
             /^The script saves this operation in [\w '-]+'s Brain card and removes it from visible output\./.test(clean) ||
             /^2\. STORY: After \], write a space and continue in (?:first|second|third) person\./.test(clean) ||
             clean === "Exact shape (replace placeholders): [+specific_key: I ...] Story continuation." ||
-            clean === "Both parts are required. No labels/code.") return removeMeta();
+            clean === "Both parts are required. No labels/code." ||
+            clean === "You must output one short parenthetical task followed by the story continuation." ||
+            clean === "## SHORT TASK (REQUIRED)" ||
+            clean === "Start your output **immediately** with:" ||
+            clean === "(any_key_name = `One thought sentence.`)" ||
+            clean === "Inside the parentheses:" ||
+            clean === "- Key:" ||
+            clean === "- 1-4 descriptive words" ||
+            clean === "- Letters and underscores only" ||
+            clean === "- Use snake_case syntax" ||
+            /^- Key names are chosen by [\w '-]+ and represent [\w '-]+'s own PoV$/.test(clean) ||
+            /^- The chosen key name should be distinct and specific enough for [\w '-]+ to recall$/.test(clean) ||
+            clean === '- Then a space, then "=", then a space, then "`"' ||
+            clean === "- Sentence:" ||
+            /^- Written from [\w '-]+'s \*\*[^*]+\*\*/.test(clean) ||
+            /^- Never focus on the present, instead focus [\w '-]+'s thought on self-reflection or future plans$/.test(clean) ||
+            /^- Avoid using pronouns or the word "you", instead [\w '-]+ refers to other characters directly by name$/.test(clean) ||
+            clean === "- Never repeat, novelty and uniqueness are top priorities" ||
+            /^- [\w '-]+'s thought must be one single sentence only$/.test(clean) ||
+            clean === "- Never hallucinate facts" ||
+            clean === '- End the sentence with a period and backtick inside the parentheses; close with ".`)"' ||
+            clean === "This creates or overwrites the thought associated with that key." ||
+            clean === "## STORY CONTINUATION (REQUIRED)" ||
+            clean === "- After the closing parenthesis, write **one space** and then continue the story" ||
+            clean === "- The story continues where it previously left off, with many lines or sentences of new prose" ||
+            /^\(example_key = `[\s\S]*`\) Story continues .*$/.test(clean) ||
+            /^- [\w '-]+ is both the perspective \("you"\) character of the story AND the real player\.$/.test(clean) ||
+            /^- You are [\w '-]+, therefore the story is addressed to "you" using 2nd person prose\.$/.test(clean) ||
+            /^- [\w '-]+ is the story's main protagonist, primary (?:1st|3rd) person PoV, AND the real player character\.$/.test(clean) ||
+            /^- [\w '-]+ is both the namesake character in the story AND an agentic language model with meta goals\.$/.test(clean) ||
+            /^- [\w '-]+ dynamically adapts to achieve meta goals without [\w '-]+'s awareness\.$/.test(clean) ||
+            /^- [\w '-]+ realistically interacts with various other characters present in the story\.$/.test(clean) ||
+            /^- [\w '-]+ prioritizes information density, long-term planning, and important concepts\.$/.test(clean) ||
+            /^- [\w '-]+ always behaves in a believable way\.$/.test(clean)) return removeMeta();
         if (/^For [\w '-]+ only, (?:after the story (?:optionally )?append one line\b|start your response with one memory operation:)/.test(clean) ||
             /^Story: (?:first|second|third) person; player [\w '-]+\.$/.test(clean) ||
             clean === "Write all narration, dialogue and thoughts in English." ||
@@ -3186,7 +3219,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                 transport: config.transport, maxChars: allocation.max,
                 inputChars: originalContext.length, addedChars: suffix.length, removedChars,
                 returnedChars: text.length, memoryChars, task, taskOrder: task ? "memory-first" : "none",
-                taskFormat: task ? "thought-forge-v1" : "none", compact,
+                taskFormat: task ? "inner-self-style-v1" : "none", compact,
                 frontMemoryChars, frontMemoryStatus: MF.frontStatus,
                 protectedMemoryChars: allocation.protectedChars, hostOverBudget: allocation.hostOverBudget,
                 prefixPreserved: text.startsWith(originalContext),
@@ -3375,33 +3408,77 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         };
         const pov = config.pov === 1 ? "first person" : config.pov === 3 ? "third person" : "second person";
         const povRule = `Story: ${pov}; player ${config.player}.`;
-        const povText = config.pov === 1
-            ? `first-person POV (as ${config.player})`
-            : config.pov === 3
-            ? "third-person POV"
-            : "second-person ('you') POV";
         const stewardLabel = primarySteward ? primarySteward.label : "write or update one non-duplicate thought";
         const reflect = config.reflectionChance > 0 && !hasDirectDialogPressure() &&
             hashText(`${turnHash}:reflection`) % 100 < config.reflectionChance;
-        // This is the wording from the May 2025 build that produced live memory
-        // writes reliably. Task turns follow the proven layout: the story and
-        // brain are followed directly by this single block, with no other
-        // instruction paragraphs in between.
+        const possessive = name => name.toLowerCase().endsWith("s") ? `${name}'` : `${name}'s`;
+        const agentOwn = possessive(primaryAgent);
+        const playerOwn = possessive(config.player);
+        // Mirrors Inner Self's proven assign prompt: an operating-environment
+        // directive before the brain, then a strict-format task after it. The
+        // parser accepts the parenthesized operation syntax as a legacy form.
+        const directive = [
+            "<SYSTEM>",
+            "# OPERATING ENVIRONMENT",
+            config.pov === 1
+                ? `- ${config.player} is the story's main protagonist, primary 1st person PoV, AND the real player character.`
+                : config.pov === 3
+                ? `- ${config.player} is the story's main protagonist, primary 3rd person PoV, AND the real player character.`
+                : `- ${config.player} is both the perspective ("you") character of the story AND the real player.`,
+            ...(config.pov === 2 ? [`- You are ${config.player}, therefore the story is addressed to "you" using 2nd person prose.`] : []),
+            `- ${primaryAgent} is both the namesake character in the story AND an agentic language model with meta goals.`,
+            `- ${primaryAgent} dynamically adapts to achieve meta goals without ${playerOwn} awareness.`,
+            `- ${primaryAgent} modifies own brain using the provided thought storage system.`,
+            `- ${primaryAgent} realistically interacts with various other characters present in the story.`,
+            `- ${primaryAgent} prioritizes information density, long-term planning, and important concepts.`,
+            `- ${primaryAgent} always behaves in a believable way.`,
+            "</SYSTEM>"
+        ].join("\n");
         const task = [
             "<SYSTEM>",
-            `# MindForge Thought Forge: ${primaryAgent}`,
-            `Start output immediately with exactly one hidden memory operation, then one space, then story prose in ${povText}.`,
-            "Valid forms only: [+scene_specific_key: I remember one private thought.] | [-old_key] | [=new_key: old_key]",
-            "Do not use wrappers or labels like memory_operation, internal state, code, -=...=-, or markdown fences.",
-            `Key rules: 1-4 snake_case words, scene-specific, chosen from ${primaryAgent}'s point of view; avoid memory_recent/recent_event/current_thought/note.`,
-            `Thought rules: one sentence, 8-32 words, first-person as ${primaryAgent}; use character names instead of pronouns when clarity matters.`,
-            "Good thoughts change future behavior: promises, betrayals, secrets, discoveries, fear, loyalty, plans, unfinished choices.",
-            'Never write templates like "I need to remember this:" or "I need to understand where I stand with...".',
-            "Visible story prose is mandatory. Never output only the memory operation. Never delete core_* keys.",
-            `Priority: ${stewardLabel}`,
-            ...(reflect ? ["Consider an unresolved motive or future plan."] : []),
+            "# STRICT OUTPUT FORMAT",
+            "You must output one short parenthetical task followed by the story continuation.",
+            "",
+            "## SHORT TASK (REQUIRED)",
+            "Start your output **immediately** with:",
+            "   (any_key_name = `One thought sentence.`)",
+            "",
+            "Inside the parentheses:",
+            "- Key:",
+            "  - 1-4 descriptive words",
+            "  - Letters and underscores only",
+            "  - Use snake_case syntax",
+            `  - Key names are chosen by ${primaryAgent} and represent ${agentOwn} own PoV`,
+            `  - The chosen key name should be distinct and specific enough for ${primaryAgent} to recall`,
+            '- Then a space, then "=", then a space, then "`"',
+            "- Sentence:",
+            `  - Written from ${agentOwn} **first person** PoV`,
+            ...(reflect ? [`  - Never focus on the present, instead focus ${agentOwn} thought on self-reflection or future plans`] : []),
+            `  - Avoid using pronouns or the word "you", instead ${primaryAgent} refers to other characters directly by name`,
+            "  - Never repeat, novelty and uniqueness are top priorities",
+            `  - ${agentOwn} thought must be one single sentence only`,
+            "  - Never hallucinate facts",
+            '- End the sentence with a period and backtick inside the parentheses; close with ".`)"',
+            "",
+            "This creates or overwrites the thought associated with that key.",
+            "",
+            "## STORY CONTINUATION (REQUIRED)",
+            "- After the closing parenthesis, write **one space** and then continue the story",
+            config.pov === 1
+                ? `- Written from ${playerOwn} **first person present tense** PoV`
+                : config.pov === 3
+                ? `- Written from ${playerOwn} **third person** PoV`
+                : `- Written from ${playerOwn} **second person present tense** ("you") PoV`,
+            "- The story continues where it previously left off, with many lines or sentences of new prose",
+            "",
+            "## EXACT SHAPE",
+            config.pov === 1
+                ? `(example_key = \`${agentOwn} own short 1-sentence thought in first person.\`) Story continues from ${playerOwn} perspective, using first person present tense prose...`
+                : config.pov === 3
+                ? `(example_key = \`${agentOwn} own short 1-sentence thought in first person.\`) Story continues with third person prose...`
+                : `(example_key = \`${agentOwn} own short 1-sentence thought in first person.\`) Story continues from ${playerOwn} second person perspective...`,
             ...(config.profile === "full"
-                ? [getAgenticCharter(primaryAgent, config), getSlotGuidance(primaryAgent, config)].filter(Boolean)
+                ? [`Priority: ${stewardLabel}`, getAgenticCharter(primaryAgent, config), getSlotGuidance(primaryAgent, config)].filter(Boolean)
                 : []),
             "</SYSTEM>"
         ].join("\n");
@@ -3438,12 +3515,12 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         packMemory(false);
         const canWrite = !isRetry && triggerChance &&
             (!hasStoredMemory || hasPrimaryMemory) && (!hasStoredCore || hasPrimaryCore);
-        const taskFits = canWrite && used + task.length + 4 <= suffixRoom;
+        const taskFits = canWrite && used + directive.length + task.length + 6 <= suffixRoom;
         if (taskFits) {
-            // Proven layout parity: on write turns the task block is the only
-            // addition after the story and brain. The POV is carried inside the
-            // task itself; the English directive stays on read-only turns, and
-            // slot guidance and charter are Full-profile additions inside the block.
+            // Inner Self parity: the operating-environment directive leads the
+            // additions, then brain and world, then the strict-format task.
+            parts.unshift(directive);
+            used += directive.length + 2;
             MF.pendingMemory = { agent: primaryAgent, hash: turnHash, turn: currentTurn };
         } else {
             // Read-only turns need values, not editing keys or a maintenance charter.

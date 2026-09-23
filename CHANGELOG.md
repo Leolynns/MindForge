@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — Inner Self-style prompt parity
+
+- Adopt Inner Self's proven prompt structure: an "OPERATING ENVIRONMENT"
+  directive (the NPC is also an agentic model that maintains its own brain)
+  plus the strict-format assign task requesting the parenthesized
+  `(key = ` + "`thought`" + `)` operation and ending with the exact output-shape
+  example.
+- The parser already accepts the parenthesized syntax as a legacy form; storage,
+  labels, and quality gates are unchanged. `contextStats.taskFormat` reports
+  `inner-self-style-v1`.
+- Strip full and partial echoes of the directive and task from Output; the
+  partial-echo test covers every line of both blocks.
+- Balanced keeps pure parity; the Full profile adds the steward priority,
+  charter, and slot guidance inside the task block.
+- Active context cost moves to parity with Inner Self (2,301 vs 2,319 added
+  characters in the matched fixture); passive delivery remains 247 characters.
+- Live model compliance of this prompt has not been verified yet.
+
 ## Unreleased — Proven task layout parity
 
 - Write turns now place the task block directly after the story and brain, with
