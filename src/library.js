@@ -130,7 +130,7 @@ function MindForgeParseOutput(raw) {
         }
         if (brainBlock && (!clean || /^-\s+\S/.test(clean))) return removeMeta();
         brainBlock = false;
-        if (/^For [\w '-]+ only, after the story (?:optionally )?append one line\b/.test(clean) ||
+        if (/^For [\w '-]+ only, (?:after the story (?:optionally )?append one line\b|start your response with one memory operation:)/.test(clean) ||
             /^Story: (?:first|second|third) person; player [\w '-]+\.$/.test(clean) ||
             clean === "Write all narration, dialogue and thoughts in English." ||
             /^Slots: relationship_\w+, goal_current, plan_next, secret_hidden; _state_current expires\.$/.test(clean) ||
@@ -2699,7 +2699,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                 mode: "disabled", inputChars: originalContext.length, returnedChars: text.length,
                 addedChars: 0, removedChars: originalContext.length - text.length, memoryChars: 0,
                 frontMemoryChars: 0, frontMemoryStatus: owned ? "stale" : "disabled",
-                task: false, compact: false, prefixPreserved: text.startsWith(originalContext), englishRequested: false
+                task: false, taskOrder: "none", compact: false, prefixPreserved: text.startsWith(originalContext), englishRequested: false
             };
         }
         if (cleanPendingTask && parsedOutput) text = parsedOutput.text || "\u200B";
@@ -2971,7 +2971,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                 mode: cacheMode ? "cache" : "standard", available: suffixRoom,
                 transport: config.transport, maxChars: allocation.max,
                 inputChars: originalContext.length, addedChars: suffix.length, removedChars,
-                returnedChars: text.length, memoryChars, task, compact,
+                returnedChars: text.length, memoryChars, task, taskOrder: task ? "memory-first" : "none", compact,
                 frontMemoryChars, frontMemoryStatus: MF.frontStatus,
                 protectedMemoryChars: allocation.protectedChars, hostOverBudget: allocation.hostOverBudget,
                 prefixPreserved: text.startsWith(originalContext),
@@ -3160,7 +3160,8 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         };
         const pov = config.pov === 1 ? "first person" : config.pov === 3 ? "third person" : "second person";
         const povRule = `Story: ${pov}; player ${config.player}.`;
-        const task = `For ${primaryAgent} only, after the story append one line (required when this task is present): [+specific_key: I ...] | [-old_key] | [=new_key: old_key]. One short grounded first-person thought; reuse keys, protect core_*. No labels/code. Omit memory before shortening the story.`;
+        const forms = hasStoredMemory ? "[+specific_key: I ...] | [-old_key] | [=new_key: old_key]" : "[+specific_key: I ...]";
+        const task = `For ${primaryAgent} only, start your response with one memory operation: ${forms}. Replace the example with one short grounded first-person thought; name other people explicitly.${hasStoredMemory ? " Reuse keys; protect core_*." : ""} Then continue the story in ${pov}; leave ${config.player}'s choices and dialogue to the player. Both parts are required. No labels/code.`;
         let blocks = [];
         let memoryChars = 0;
         let hasPrimaryMemory = false;
@@ -3198,7 +3199,8 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         const taskFits = canWrite && used + povRule.length + task.length + 4 <= suffixRoom;
         if (taskFits) {
             addPart(povRule);
-            addPart(task);
+            // Reserve the complete task before optional guidance; append it last.
+            used += task.length + 2;
         } else {
             // Read-only turns need values, not editing keys or a maintenance charter.
             // Keep the ownership header and every selected sentence verbatim.
@@ -3233,6 +3235,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         }
         if (taskFits) addPart(getAgenticCharter(primaryAgent, config));
         addPart(getWorldContext(sceneText, config, base, Math.min(600, suffixRoom - used - 2)));
+        if (taskFits) parts.push(task);
         MF.delivery = { hash: turnHash, agent: primaryAgent, task: Boolean(taskFits), consumed: false };
         finishContext(parts, Boolean(taskFits), memoryChars, !taskFits);
         setBrainStatus(getBrainCard(primaryAgent), taskFits

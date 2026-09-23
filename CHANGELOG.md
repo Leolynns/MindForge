@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — Memory-first task delivery
+
+- Request one private memory operation before the story continuation, matching
+  Inner Self's output order. Remove the conflicting instruction to omit memory
+  before shortening the story; both output parts are explicitly requested.
+- Give empty brains only the new-thought operation, without delete/rename forms.
+- Reserve the complete task before optional guidance and append it last without
+  changing the incoming cache prefix. Expose `contextStats.taskOrder`.
+- Ask the model to name other characters in private thoughts and leave the
+  player's choices and dialogue to the player.
+- Cover the reported Avery prose-only response, prefix writes, prompt echoes,
+  and whole-task budgets in 23 local scripted scenarios. Prose-only output still
+  does not fabricate a private thought; live model compliance remains unverified.
+- Remeasure the matched three-memory payload: 901 added characters and 195/194
+  reference tokens; passive delivery remains 247 characters and 52/51 tokens.
+
 ## Unreleased — Brain write compatibility and visible status
 
 - Compare card storage with Inner Self, KV Inner Self, and Optimized Context
