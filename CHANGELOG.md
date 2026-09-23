@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — Structured memory task
+
+- Replace the compact task paragraph with a separate MEMORY/STORY instruction
+  block, explicit key/value rules, and a combined output shape.
+- Explain that the script saves the NPC thought and removes its operation from
+  visible prose; distinguish the operation from dialogue and model reasoning.
+- Retain whole-task budgeting and new-thought-only instructions for empty brains.
+  The larger task is deferred when it cannot fit alongside required memory.
+- Strip complete and partial task echoes without turning placeholders into
+  memories. Capture the multi-line task in Diagnostics and expose
+  `contextStats.taskFormat: structured-v2` on active turns.
+- Reproduce the reported 297-character prose-only response in local tests:
+  matching hooks and zero parser removals still result in no memory write.
+  Live compliance with the revised task remains unverified.
+- Remeasure the matched three-memory payload: 1,399 added characters and
+  308/306 reference tokens; passive delivery remains 247 characters and 52/51.
+
 ## Unreleased — Paired diagnostic capture
 
 - Add opt-in `Diagnostics: false` configuration and a separate MindForge
@@ -8,6 +25,8 @@
   counts, turn-match information, errors, and the memory result.
 - Bound the serialized report to 9,000 characters, report omitted text, preserve
   the first completed pair across repeated hooks, and clear capture when disabled.
+- Add `/mf debug [on|off]` to toggle capture in-game without editing the config
+  card; no argument flips the current value.
 - Keep diagnostic failures separate from normal story and memory processing.
 - This provides local hook evidence for empty-brain diagnosis; it does not
   establish live model delivery or instruction compliance.

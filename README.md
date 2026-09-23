@@ -26,7 +26,7 @@ continues playing normally.
   avoids empty Input/Output returns that the host rejects.
 - **Optional FrontMemory experiment:** can stage existing primary-NPC memories
   in the host's shared memory field, with delivery checks and automatic cleanup.
-- **Smaller active prompts:** the matched three-memory test uses 901 added
+- **Smaller active prompts:** the matched three-memory test uses 1,399 added
   characters, versus approximately 2,320 in original Inner Self / KV Inner Self.
 - **Compact passive turns:** 247 characters for the same three memories. Read-only
   turns keep complete thoughts and their owner while omitting editing syntax.
@@ -353,7 +353,15 @@ story, while leaving the player's choices and dialogue to the player.
 `state.MindForge.contextStats.taskOrder` is `memory-first` when a task is included
 and `none` otherwise. The previous instruction to omit memory to save story
 space has been removed; a task that cannot fit the context budget is deferred
-as a whole. This prompt change has not yet been verified against a live model.
+as a whole.
+
+The current `structured-v2` task separates MEMORY and STORY instructions, gives
+the combined output shape, and explains that Output saves the operation and
+removes it from the visible story. It distinguishes the NPC's stored thought
+from dialogue or model reasoning. `contextStats.taskFormat` identifies this
+revision (`none` on read-only turns). Its `<SYSTEM>` delimiters are prompt text,
+not an API system-role change. This revision has not yet been verified against
+a live model; supplied-output tests establish parsing and storage only.
 
 **Open the generated `Avery Brain` card**, rather than the scenario's ordinary
 `Avery` character card (substitute your NPC's name). As in Inner Self, **Entry**
@@ -386,11 +394,13 @@ hook can be processed.
 
 ### Capture an empty-brain turn
 
-Set `Diagnostics: true` in **Configure MindForge → Entry**, then generate one
-new turn. Open **MindForge Diagnostics → Notes** to read the paired report:
+Set `Diagnostics: true` in **Configure MindForge → Entry**, or type `/mf debug on`
+in-game, then generate one new turn. Open **MindForge Diagnostics → Notes** to
+read the paired report:
 
-- `context.task` and `context.returnedTail`: the task and end of the context
-  returned by MindForge, with `taskIncluded`, `taskOrder`, and the turn hash.
+- `context.task` and `context.returnedTail`: the complete task block and end of
+  the context returned by MindForge, with `taskIncluded`, `taskOrder`,
+  `taskFormat`, and the turn hash. Check `omittedChars` for any truncation.
 - `output.raw`: text received by MindForge's Output hook **before cleanup**.
 - `output.cleaned`, parser counts, and `output.result`: what the script retained
   and why the memory operation was saved or rejected.
@@ -452,13 +462,13 @@ Same 1,000-character host input, three stored memories, and a memory-update task
 
 | Script / mode | Extra context characters | Memories retained |
 |---|---:|---:|
-| **MindForge — standard or cache** | **901** | **3/3** |
+| **MindForge — standard or cache** | **1,399** | **3/3** |
 | [Inner Self — standard](https://github.com/LewdLeah/Inner-Self) | 2,319 | 3/3 |
 | [KV Inner Self — cache](https://github.com/Zoocata1/KV-Inner-Self) | 2,320 | 3/3 |
 | [Optimized Context Inner Self — standard](https://github.com/XloSky/Optimized-Context-Inner-Self) | 2,048 | 3/3 |
 | Optimized Context Inner Self — cache | 1 in context + 1,988 in a task card | 3/3 in the card |
 
-MindForge uses **about 61% fewer added characters than original / KV Inner Self**
+MindForge uses **about 40% fewer added characters than original / KV Inner Self**
 in this fixture. Task-card text is not free context; same-turn host selection of
 that card is not assumed.
 
@@ -470,7 +480,7 @@ below measure added or reformatted text, separately from any removed host text.
 
 | Fixture / script | `cl100k_base` | `o200k_base` |
 |---|---:|---:|
-| **Active — MindForge** | **195** | **194** |
+| **Active — MindForge** | **308** | **306** |
 | Active — original Inner Self, standard | 524 | 526 |
 | Active — KV Inner Self, cache | 521 | 522 |
 | **Passive — MindForge** | **52** | **51** |
@@ -479,7 +489,7 @@ below measure added or reformatted text, separately from any removed host text.
 
 The passive fixture retains the same three thoughts in **247 characters**,
 versus 318–320 in original / KV Inner Self. Compared with KV, the added-text token
-reduction is approximately **63% active** and **34–35% passive** on these encodings.
+reduction is approximately **41% active** and **34–35% passive** on these encodings.
 The original standard-path rows also remove/reformat 5 and 6 input tokens
 respectively; whole-prompt deltas are not the same as added-text cost.
 
@@ -508,8 +518,8 @@ that does not establish superior long-term storytelling or retention.
 
 - Node 22.20.0; isolated hooks with JSON-persisted state and cards.
 - Three seeds: 1, 17, 42. Ten context cases in standard/cache modes.
-- Active measurements use the memory-first task revision; earlier 768-character
-  and 171/169-token figures described an older task and are superseded here.
+- Active measurements use the `structured-v2` task. Earlier 768- and
+  901-character figures described shorter tasks and are superseded here.
 - Shared active settings: 100% thought chance, 30% allocation, five-action
   lookback, second-person POV. MindForge profile: Balanced; transport: Context.
 - Passive cases disable bootstrap and set thought chance to zero.
@@ -534,6 +544,7 @@ these commands are available for inspection or manual edits:
 /mf forget <agent> <key>
 /mf rename <agent> <new_key> <old_key>
 /mf clear <agent>
+/mf debug [on|off]
 ```
 
 ## Credits and license

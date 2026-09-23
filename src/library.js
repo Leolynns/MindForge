@@ -62,12 +62,15 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
         // Repeated Context/Output calls must not erase the first completed pair.
         if (trace?.version === 1 && trace.context?.historyHash === historyHash && trace.output) return;
         const returned = String(globalThis.text || "");
-        const task = returned.split("\n").findLast(line => /^For [\w '-]+ only,/.test(line)) || "";
+        const structured = /<SYSTEM>\r?\n# MindForge memory task v2\r?\n[\s\S]*?<\/SYSTEM>\s*$/.exec(returned);
+        const task = MF.contextStats?.task ? (structured?.[0].trimEnd() ||
+            returned.split("\n").findLast(line => /^For [\w '-]+ only,/.test(line)) || "") : "";
         trace = {
-            version: 1, revision: "memory-first-trace-v1", context: {
+            version: 1, revision: "structured-task-trace-v2", context: {
                 actionCount: currentInfo.actionCount ?? null, historyHash,
                 agent: MF.delivery?.agent || "", taskIncluded: MF.contextStats?.task === true,
                 taskOrder: MF.contextStats?.taskOrder || "none", maxChars: currentInfo.maxChars ?? null,
+                taskFormat: MF.contextStats?.taskFormat || "none",
                 useCacheEfficient: currentInfo.useCacheEfficient === true,
                 returnedChars: returned.length,
                 task: snapshot(task, 1400),
@@ -83,7 +86,7 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
     } else {
         if (trace?.version !== 1 || trace.output) {
             if (trace?.output?.historyHash === historyHash) return;
-            trace = { version: 1, revision: "memory-first-trace-v1", context: null, output: null };
+            trace = { version: 1, revision: "structured-task-trace-v2", context: null, output: null };
         }
         trace.output = {
             actionCount: currentInfo.actionCount ?? null, historyHash,
@@ -239,6 +242,19 @@ function MindForgeParseOutput(raw) {
         }
         if (brainBlock && (!clean || /^-\s+\S/.test(clean))) return removeMeta();
         brainBlock = false;
+        // Recognize partial echoes of our structured task even without its tags.
+        if (/^# MindForge memory task v2$/.test(clean) ||
+            /^Maintain [\w '-]+'s private memory while continuing [\w '-]+'s story\.$/.test(clean) ||
+            clean === "Write BOTH parts in this order:" ||
+            clean === "1. MEMORY: Start the response with [+specific_key: I ...]." ||
+            clean === "Replace specific_key with 1-4 descriptive snake_case words." ||
+            /^Replace I \.\.\. with one short sentence from [\w '-]+'s first-person viewpoint:/.test(clean) ||
+            clean === "The brain is empty: create a new thought; do not delete or rename." ||
+            clean === "Existing memories: reuse a key to update it, or use [-old_key] or [=new_key: old_key]. Protect core_*." ||
+            /^The script saves this operation in [\w '-]+'s Brain card and removes it from visible output\./.test(clean) ||
+            /^2\. STORY: After \], write a space and continue in (?:first|second|third) person\./.test(clean) ||
+            clean === "Exact shape (replace placeholders): [+specific_key: I ...] Story continuation." ||
+            clean === "Both parts are required. No labels/code.") return removeMeta();
         if (/^For [\w '-]+ only, (?:after the story (?:optionally )?append one line\b|start your response with one memory operation:)/.test(clean) ||
             /^Story: (?:first|second|third) person; player [\w '-]+\.$/.test(clean) ||
             clean === "Write all narration, dialogue and thoughts in English." ||
@@ -2812,7 +2828,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                 mode: "disabled", inputChars: originalContext.length, returnedChars: text.length,
                 addedChars: 0, removedChars: originalContext.length - text.length, memoryChars: 0,
                 frontMemoryChars: 0, frontMemoryStatus: owned ? "stale" : "disabled",
-                task: false, taskOrder: "none", compact: false, prefixPreserved: text.startsWith(originalContext), englishRequested: false
+                task: false, taskOrder: "none", taskFormat: "none", compact: false, prefixPreserved: text.startsWith(originalContext), englishRequested: false
             };
         }
         if (cleanPendingTask && parsedOutput) text = parsedOutput.text || "\u200B";
@@ -3001,6 +3017,25 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                         brainCard.description = serializeBrain({}, agent.name);
                         outputMsg = `✅ Cleared all thoughts from ${agent.name}'s brain.`;
                     }
+                } else if (sub === "debug") {
+                    const arg = (parts[2] || "").toLowerCase();
+                    const configCard = MindForgeConfigCard();
+                    const current = /^\s*Diagnostics\s*:\s*true\s*$/im.test(configCard?.entry || "");
+                    if (!configCard) {
+                        outputMsg = `❌ Configuration card not found.`;
+                    } else if (arg && arg !== "on" && arg !== "off") {
+                        outputMsg = `❌ Invalid syntax. Use: /mf debug [on|off]`;
+                    } else {
+                        const next = arg === "on" ? true : arg === "off" ? false : !current;
+                        const line = `Diagnostics: ${next}`;
+                        configCard.entry = /^\s*Diagnostics\s*:.*$/im.test(configCard.entry)
+                            ? configCard.entry.replace(/^\s*Diagnostics\s*:.*$/im, line)
+                            : `${configCard.entry.trimEnd()}\n${line}`;
+                        outputMsg = `🧩 [MindForge Debug]\n\nDiagnostics: ${next}\n`;
+                        outputMsg += next
+                            ? `Generate one new turn, then open the "MindForge Diagnostics" card and copy its Notes.\nTurn capture off with /mf debug off when done.`
+                            : `Capture disabled. The stored trace clears on the next hook.`;
+                    }
                 } else if (sub === "help") {
                     outputMsg = `🧩 [MindForge Commands Help]\n\n`;
                     outputMsg += `OOC Commands:\n`;
@@ -3010,6 +3045,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                     outputMsg += `- /mf forget <agent> <key> : Delete memory key.\n`;
                     outputMsg += `- /mf rename <agent> <new_key> <old_key> : Rename memory key.\n`;
                     outputMsg += `- /mf clear <agent> : Clear all memories for agent.\n`;
+                    outputMsg += `- /mf debug [on|off] : Toggle paired diagnostic capture (MindForge Diagnostics card).\n`;
                     outputMsg += `\n(Type anything and press Submit to resume game.)`;
                 } else {
                     const agent = config.agents.find(a => a.name.toLowerCase() === parts[1].toLowerCase());
@@ -3085,7 +3121,8 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                 mode: cacheMode ? "cache" : "standard", available: suffixRoom,
                 transport: config.transport, maxChars: allocation.max,
                 inputChars: originalContext.length, addedChars: suffix.length, removedChars,
-                returnedChars: text.length, memoryChars, task, taskOrder: task ? "memory-first" : "none", compact,
+                returnedChars: text.length, memoryChars, task, taskOrder: task ? "memory-first" : "none",
+                taskFormat: task ? "structured-v2" : "none", compact,
                 frontMemoryChars, frontMemoryStatus: MF.frontStatus,
                 protectedMemoryChars: allocation.protectedChars, hostOverBudget: allocation.hostOverBudget,
                 prefixPreserved: text.startsWith(originalContext),
@@ -3274,8 +3311,23 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         };
         const pov = config.pov === 1 ? "first person" : config.pov === 3 ? "third person" : "second person";
         const povRule = `Story: ${pov}; player ${config.player}.`;
-        const forms = hasStoredMemory ? "[+specific_key: I ...] | [-old_key] | [=new_key: old_key]" : "[+specific_key: I ...]";
-        const task = `For ${primaryAgent} only, start your response with one memory operation: ${forms}. Replace the example with one short grounded first-person thought; name other people explicitly.${hasStoredMemory ? " Reuse keys; protect core_*." : ""} Then continue the story in ${pov}; leave ${config.player}'s choices and dialogue to the player. Both parts are required. No labels/code.`;
+        const task = [
+            "<SYSTEM>",
+            "# MindForge memory task v2",
+            `Maintain ${primaryAgent}'s private memory while continuing ${config.player}'s story.`,
+            "Write BOTH parts in this order:",
+            "1. MEMORY: Start the response with [+specific_key: I ...].",
+            "Replace specific_key with 1-4 descriptive snake_case words.",
+            `Replace I ... with one short sentence from ${primaryAgent}'s first-person viewpoint: a grounded belief, desire, or plan. Name other people; invent no facts.`,
+            hasStoredMemory
+                ? "Existing memories: reuse a key to update it, or use [-old_key] or [=new_key: old_key]. Protect core_*."
+                : "The brain is empty: create a new thought; do not delete or rename.",
+            `The script saves this operation in ${primaryAgent}'s Brain card and removes it from visible output. It is not dialogue or a reasoning section.`,
+            `2. STORY: After ], write a space and continue in ${pov}. Leave ${config.player}'s choices and dialogue to the player.`,
+            "Exact shape (replace placeholders): [+specific_key: I ...] Story continuation.",
+            "Both parts are required. No labels/code.",
+            "</SYSTEM>"
+        ].join("\n");
         let blocks = [];
         let memoryChars = 0;
         let hasPrimaryMemory = false;
