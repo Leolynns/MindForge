@@ -1,12 +1,14 @@
-node_modules/
-npm-debug.log*
-
-# Editor and OS noise
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-
-dist/
-scratch/
-Inner-Self-main/
+# Public distribution: only these files belong in this repository.
+/*
+!/.gitignore
+!/README.md
+!/CHANGELOG.md
+!/LICENSE
+!/NOTICE
+!/mindforge.png
+!/src/
+/src/*
+!/src/library.js
+!/src/input.js
+!/src/context.js
+!/src/output.js

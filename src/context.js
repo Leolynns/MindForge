@@ -1,3 +1,4 @@
+// @cache-compatible
 globalThis.stop ??= false;
 MindForge("context");
 const modifier = (text) => {

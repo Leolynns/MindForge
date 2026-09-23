@@ -1,26 +1,254 @@
 /**
  * MindForge Core Library
  * A lightweight, context-efficient, high-quality agentic NPC memory script for AI Dungeon.
- * MindForge Quality Forge v5.1: strict first-person thoughts, smart scene fallback, memory-operation leak cleanup, grammar repair.
+ * Opt-in NPC memory with story-first output and bounded context use.
  */
+function MindForgeConfigCard() {
+    return Array.isArray(globalThis.storyCards) ? storyCards.find(card => card && (
+        (typeof card.title === "string" && card.title.trim().toLowerCase().includes("configure mindforge")) ||
+        (typeof card.keys === "string" && card.keys.trim().toLowerCase().includes("mindforge_config"))
+    )) : undefined;
+}
+
+function MindForgeIsEnabled(card = MindForgeConfigCard()) {
+    let enabled = false;
+    for (const line of typeof card?.entry === "string" ? card.entry.split("\n") : []) {
+        const match = line.match(/^\s*Enabled\s*:\s*(.*?)\s*$/i);
+        if (match) enabled = match[1].toLowerCase() === "true";
+    }
+    return enabled;
+}
+
 function MindForge(hook) {
     "use strict";
+    const originalText = typeof globalThis.text === "string" ? globalThis.text : "";
+    const delivery = globalThis.state?.MindForge?.delivery;
+    // Players who have not opted in get untouched output. A task already sent
+    // before disabling is cleaned once, without committing a memory change.
+    const ownsOutput = hook === "output" && (MindForgeIsEnabled() || (delivery?.task && !delivery.consumed));
+    let output = null;
     try {
-        return MindForgeCore(hook);
+        if (ownsOutput) output = MindForgeParseOutput(originalText);
+        return MindForgeCore(hook, output);
     } catch (error) {
         if (globalThis.state && typeof state === "object" && !Array.isArray(state)) {
-            const MF = state.MindForge = state.MindForge || {};
+            const MF = state.MindForge = state.MindForge && typeof state.MindForge === "object" && !Array.isArray(state.MindForge) ? state.MindForge : {};
             MF.agent = "";
-            MF.health = MF.health || {};
+            MF.delivery = null;
+            MF.pendingMemory = { agent: "", hash: "", turn: -999 };
+            MF.health = MF.health && typeof MF.health === "object" && !Array.isArray(MF.health) ? MF.health : {};
             MF.health.errors = (MF.health.errors || 0) + 1;
             MF.health.lastError = String(error && error.message ? error.message : error).slice(0, 180);
         }
-        globalThis.text = (typeof globalThis.text === "string" && globalThis.text.trim()) ? globalThis.text : "\u200B";
+        globalThis.text = output ? (output.text || "\u200B") : (originalText || "\u200B");
         return;
     }
 }
 
-function MindForgeCore(hook) {
+// One bounded, structural output parser for active, passive, and no-NPC turns.
+// It recognizes the private protocol, not ordinary words such as "task" or "forget".
+function MindForgeParseOutput(raw) {
+    "use strict";
+    const result = { text: String(raw || ""), operations: [], removed: 0, truncated: 0, scaffolding: 0, ui: 0, code: 0 };
+    const removeMeta = () => { result.scaffolding++; return ""; };
+    let source = result.text
+        .replace(/<(system|think|analysis|reasoning)\b[^>]*>[\s\S]*?<\/\1[ \t]*(?:>|(?=\r?\n|$))/gi, removeMeta)
+        .replace(/<(?:system|think|analysis|reasoning)\b[^>]*>[\s\S]*$/gi, removeMeta)
+        .replace(/<\/(?:system|think|analysis|reasoning)[ \t]*>?/gi, removeMeta)
+        .replace(/<\|im_start\|>(?:system|developer|user)\b[^\n]*\n[\s\S]*?(?:<\|im_end\|>|$)/gi, removeMeta)
+        .replace(/<\|im_start\|>assistant\b[^\n]*\n?/gi, removeMeta)
+        .replace(/<\|start_header_id\|>assistant<\|end_header_id\|>/gi, removeMeta)
+        .replace(/<\|(?:im_end|eot_id|endoftext)\|>/gi, removeMeta)
+        .replace(/<!--mf:[a-zA-Z0-9_]+-->|\u200B[\u200C\u200D]*\u200B?/g, "");
+
+    // Technical fences are not narrative. Plain text/story fences are unwrapped.
+    source = source.replace(/^[ \t]*```([^\n]*)\n([\s\S]*?)(?:^[ \t]*```[ \t]*(?=\r?$)|$(?![\s\S]))/gm, (whole, language, body) => {
+        result.scaffolding++;
+        if (/^(?:js|javascript|python|py|json|typescript)\b/i.test(language.trim()) ||
+            /(?:^|\n)\s*(?:(?:const|let|var)\s+\w+\s*=|\w*(?:brain|state|memory)\s*=|(?:function|def)\s+\w+)/i.test(body)) { result.code++; return ""; }
+        return body;
+    });
+
+    let technical = false;
+    let brainBlock = false;
+    source = source.split("\n").map(line => {
+        const clean = line.trim();
+        if (/^#\s+(?:.+ Brain Thoughts \((?:Active|Present)\)|[\w '-]+ private|World Memory):$/.test(clean)) {
+            brainBlock = true;
+            return removeMeta();
+        }
+        if (brainBlock && (!clean || /^-\s+\S/.test(clean))) return removeMeta();
+        brainBlock = false;
+        if (/^For [\w '-]+ only, after the story optionally append one line:/.test(clean) ||
+            /^Story: (?:first|second|third) person; player [\w '-]+\.$/.test(clean) ||
+            clean === "Write all narration, dialogue and thoughts in English." ||
+            /^Slots: relationship_\w+, goal_current, plan_next, secret_hidden; _state_current expires\.$/.test(clean) ||
+            /^Private mind for [\w '-]+: private motives, loyalties, fears and plans guide actions, not player knowledge\.$/.test(clean) ||
+            /^Priority: (?:write|warmup|relationship|goal|maintain|prune|none|create [\w '-]+'s first durable thought)\.$/.test(clean) ||
+            clean === "Consider an unresolved motive or future plan.") return removeMeta();
+        const compact = clean.replace(/[^A-Za-z]/g, "").toLowerCase();
+        if (/^(?:waitingforinput|silence|continue|retry|erase|takeaturn)$/.test(compact) &&
+            (/^(?:[A-Za-z]\s+){2,}/.test(clean) || /^Waiting\s+for\s+input\.*$/i.test(clean))) { result.ui++; return removeMeta(); }
+        // UI widget IDs prove this is UI debris; preserve any story before it.
+        line = line.replace(/(?:Waiting\s*for\s*input\.*\s*)?w_(?:pencil|wand|retry|backspace)[^\n]*$/gi, () => { result.ui++; return removeMeta(); });
+        if (result.ui && /^waitingforinput$/.test(line.replace(/[^A-Za-z]/g, "").toLowerCase())) return removeMeta();
+        if (/^\s*(?:<<\s*)?(?:[⏳✅⚠️]+\s*)?(?:Generating|Updating)\s+(?:Story Arc|NPC (?:brain|memory))\b/i.test(line)) return removeMeta();
+        if (/^\s*(?:#{1,6}\s*)?(?:STRICT OUTPUT FORMAT|Story continues\.{3}|```)[ \t]*$/i.test(line) ||
+            /^\s*(?:#{1,6}\s*)?(?:MindForge Thought Forge|MindForge NPC|strict output|output format|bracket operation|system instruction|configure mindforge)\b/i.test(line)) {
+            technical = true;
+            return removeMeta();
+        }
+        if (technical && (/^\s*You are [\w '-]+[.!]?\s*$/.test(line) ||
+            /^\s*(?:Thought rules|Key rules|Valid forms only|Priority|Private mind|Private motives|Story prose must|Give the story priority|Start output immediately|Reuse matching keys)\b/.test(line))) return removeMeta();
+        if (/^\s*(?:As an AI(?: language model)?|As a language model)\b/i.test(line)) return removeMeta();
+        if (/^\s*(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=|^\s*(?:function|def)\s+[A-Za-z_$][\w$]*\s*\(/.test(line) ||
+            /^\s*\w*(?:_state|_brain|_memory|State|Brain|Memory)\s*=/.test(line) ||
+            /^\s*(?:#{1,6}|\/\/)\s*(?:[-=]{3,}|.*(?:internal state|scene continuation|operation log|mindforge))/i.test(line)) { result.code++; return removeMeta(); }
+        if (clean) technical = false;
+        return line;
+    }).join("\n");
+
+    const keyPattern = "[A-Za-z_][A-Za-z0-9_]*(?:[ \\t]+[A-Za-z_][A-Za-z0-9_]*){0,3}(?:\\(\\d{1,3}\\))?";
+    const signedHeader = new RegExp(`^([+=-])[ \\t]*(${keyPattern})[ \\t]*(?:([:=])[ \\t]*|(?=[\\])}\\r\\n]|$))`);
+    const assignHeader = new RegExp(`^(${keyPattern})[ \\t]*([=:])[ \\t]*`);
+    const deleteHeader = /^(?:delete|remove|forget)[ \t]+([a-z_][a-z0-9_]*(?:\(\d{1,3}\))?)[ \t]*(?=[\])}\r\n]|$)/;
+    const cleanValue = value => value.trim().replace(/^([`"'“‘])([\s\S]*)[`"'”’]$/, "$2").trim();
+    const readHeader = (value, boundary, marked = false) => {
+        const label = value.match(/^(?:[-=]+\s*)?memory[ _-]?operation[ \t]*[:=][ \t]*/i);
+        if (label) {
+            const inner = readHeader(value.slice(label[0].length), true, true);
+            return inner && { ...inner, length: inner.length + label[0].length };
+        }
+        const signed = value.match(signedHeader);
+        if (signed && (signed[1] === "-" || signed[3])) return {
+            kind: signed[1] === "+" ? "set" : signed[1] === "-" ? "delete" : "rename",
+            key: signed[2], length: signed[0].length, explicit: true
+        };
+        if (!boundary && !marked) return null;
+        const del = value.match(deleteHeader);
+        if (del) return { kind: "delete", key: del[1], length: del[0].length, explicit: true };
+        const assign = value.match(assignHeader);
+        if (!assign || !/^[a-z_][a-z0-9_ \t()]*$/.test(assign[1]) || assign[1].trim().length < 2) return null;
+        const rest = value.slice(assign[0].length);
+        if (assign[2] === ":" && !marked && (!assign[1].includes("_") || !/^[`"']?(?:I|My)\b/.test(rest))) return null;
+        if (!marked && !/[A-Za-z]/.test(rest)) return null;
+        return { kind: "assign", key: assign[1], length: assign[0].length, explicit: marked };
+    };
+    const sentenceEnd = value => {
+        const pattern = /[.!?](?:[`"'”’])?(?=[ \t]+|$)/g;
+        let match;
+        while ((match = pattern.exec(value))) {
+            if (/(?:\b(?:Mr|Mrs|Ms|Dr|Prof|St|Sr|Jr)|\d)$/.test(value.slice(0, match.index))) continue;
+            if (value[match.index - 1] === "." || value[match.index + 1] === ".") continue;
+            return match.index + match[0].length;
+        }
+        return -1;
+    };
+    const spans = [];
+    const addOperation = (header, value, start, end, complete, repaired = false) => {
+        const val = cleanValue(value);
+        const valid = complete && header.key.length <= 64 &&
+            (header.kind === "delete" || (val && val.length <= 220));
+        spans.push({ start, end });
+        result.removed++;
+        if (!complete) result.truncated++;
+        if (valid) result.operations.push({ type: header.kind, key: header.key, val, repaired });
+    };
+
+    const opens = /[\[({]/g;
+    let opening;
+    while ((opening = opens.exec(source))) {
+        const start = opening.index;
+        const previous = spans[spans.length - 1];
+        const boundary = !source.slice(source.lastIndexOf("\n", start - 1) + 1, start).trim() ||
+            Boolean(previous && !source.slice(previous.end, start).trim());
+        const restStart = start + 1;
+        const leading = source.slice(restStart).match(/^[ \t]*/)[0].length;
+        const header = readHeader(source.slice(restStart + leading, restStart + leading + 350), boundary);
+        if (!header) {
+            // A cut-off final protocol header is hidden, but never made into a write.
+            const tail = source.slice(restStart);
+            if (/^[ \t]*[+=-][ \t]*[A-Za-z_0-9]*(?:\(\d*)?[ \t]*$/.test(tail)) {
+                spans.push({ start, end: source.length });
+                result.removed++;
+                result.truncated++;
+                break;
+            }
+            continue;
+        }
+        const valueStart = restStart + leading + header.length;
+        const newline = source.indexOf("\n", valueStart);
+        const lineEnd = newline === -1 ? source.length : newline;
+        let close = -1;
+        let fallbackClose = -1;
+        const first = source[valueStart];
+        let quote = ({ '`': '`', '"': '"', "'": "'", '“': '”', '‘': '’' })[first] || "";
+        const nested = [];
+        for (let i = valueStart; i < lineEnd; i++) {
+            const char = source[i];
+            if (quote) {
+                if (i > valueStart && char === quote && source[i - 1] !== "\\" &&
+                    (quote !== "'" || /[\s\])}]/.test(source[i + 1] || " "))) quote = "";
+                else if (/[\])}]/.test(char)) fallbackClose = i;
+                continue;
+            }
+            if (/[\[({]/.test(char)) nested.push(char);
+            else if (/[\])}]/.test(char)) {
+                if (nested.length) nested.pop();
+                else { close = i; break; }
+            }
+        }
+        if (close === -1 && quote && fallbackClose !== -1) close = fallbackClose;
+        if (close !== -1) {
+            addOperation(header, source.slice(valueStart, close), start, close + 1, true, opening[0] !== ({ ']': '[', ')': '(', '}': '{' })[source[close]]);
+            opens.lastIndex = close + 1;
+        } else {
+            const fragment = source.slice(valueStart, lineEnd);
+            const end = sentenceEnd(fragment);
+            const remaining = end < 0 ? "" : fragment.slice(end).trim();
+            // Recover an old prefix-style operation only when prose clearly follows it.
+            const recover = boundary && end > 0 && /^["“']?[A-Z][\s\S]*\s+\S/.test(remaining);
+            const spanEnd = recover ? valueStart + end : lineEnd;
+            addOperation(header, recover ? fragment.slice(0, end) : fragment, start, spanEnd, recover, true);
+            opens.lastIndex = spanEnd;
+        }
+    }
+
+    // Legacy loose operations are accepted only at line boundaries, never mid-prose.
+    let offset = 0;
+    for (const line of source.split("\n")) {
+        const start = offset + line.length - line.trimStart().length;
+        if (!spans.some(span => span.start <= start && start < span.end)) {
+            const content = line.trimStart();
+            const header = readHeader(content, true);
+            if (header) {
+                const value = content.slice(header.length);
+                const end = sentenceEnd(value);
+                const hasTail = end > 0 && value.slice(end).trim();
+                const complete = header.kind === "delete" || (end > 0 && !value.slice(0, end).endsWith("..."));
+                addOperation(header, end > 0 ? value.slice(0, end) : value,
+                    start, hasTail ? start + header.length + end : offset + line.length, complete, true);
+            }
+        }
+        offset += line.length + 1;
+    }
+    spans.sort((a, b) => a.start - b.start);
+    let cursor = 0;
+    let visible = "";
+    for (const span of spans) {
+        if (span.start < cursor) continue;
+        visible += source.slice(cursor, span.start);
+        cursor = span.end;
+        if (visible.endsWith(" ") && source[cursor] === " ") cursor++;
+    }
+    visible += source.slice(cursor);
+    // A model disclaimer can follow a removed prefix operation on the same line.
+    visible = visible.split("\n").map(line => /^\s*(?:As an AI(?: language model)?|As a language model)\b/i.test(line) ? removeMeta() : line).join("\n");
+    result.text = visible.replace(/\n[ \t]+(?=\n)/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    return result;
+}
+
+function MindForgeCore(hook, parsedOutput) {
     "use strict";
 
     // Validate AI Dungeon globals
@@ -32,7 +260,7 @@ function MindForgeCore(hook) {
         !Array.isArray(globalThis.history) ||
         typeof text !== "string"
     ) {
-        globalThis.text ||= " ";
+        globalThis.text = parsedOutput ? (parsedOutput.text || "\u200B") : (globalThis.text || " ");
         return;
     }
 
@@ -64,12 +292,17 @@ function MindForgeCore(hook) {
     // Hash recent turns so retries do not apply the same mutation twice.
     const getHistoryHash = () => {
         let n = 0;
-        const serialized = JSON.stringify(history.slice(-30));
+        const serialized = JSON.stringify(Number.isSafeInteger(info.actionCount)
+            ? [info.actionCount, history.slice(-30)] : history.slice(-30));
         for (let i = 0; i < serialized.length; i++) {
             n = ((31 * n) + serialized.charCodeAt(i)) | 0;
         }
         return n.toString(16);
     };
+
+    // History is a sliding window on the host; its length is not an adventure clock.
+    const currentTurn = Number.isSafeInteger(info.actionCount) && info.actionCount >= 0
+        ? info.actionCount : history.length;
 
     const hashText = (src = "") => {
         let n = 0;
@@ -251,7 +484,7 @@ function MindForgeCore(hook) {
         const rec = store[key] = store[key] || {};
         rec.seen = (rec.seen || 0) + (reason === "seen" ? 1 : 0);
         rec.writes = (rec.writes || 0) + (reason === "write" ? 1 : 0);
-        rec.turn = history.length;
+        rec.turn = currentTurn;
         rec.reason = reason;
     };
 
@@ -311,10 +544,16 @@ function MindForgeCore(hook) {
         const displayKey = cleanKeyForLLM(key);
         if (recentTags.includes(key) || recentTags.includes(displayKey)) score += 95;
         if (keyMentionedInText(key, sourceText)) score += 70;
-        if (Number.isInteger((MF.labels[agentName] || {})[key])) score += 35;
+        // Labels identify thoughts; their existence is not evidence of relevance.
+        const sceneWords = new Set(String(sourceText).toLowerCase().match(/[a-z]{4,}/g) || []);
+        const ignored = new Set(['that', 'this', 'with', 'from', 'have', 'will', 'they', 'their', 'must', 'would', 'could', 'should']);
+        const thoughtWords = new Set(String(value).toLowerCase().match(/[a-z]{4,}/g) || []);
+        let relevant = 0;
+        for (const word of thoughtWords) if (!ignored.has(word) && sceneWords.has(word)) relevant++;
+        score += Math.min(120, relevant * 30);
         if (typeof value === "string" && value.length > 180) score -= 15;
-        if (Number.isInteger(meta.turn)) score += Math.max(0, 28 - Math.max(0, history.length - meta.turn));
-        score += Math.min(36, (meta.seen || 0) * 4);
+        if (Number.isInteger(meta.turn)) score += Math.max(0, 28 - Math.max(0, currentTurn - meta.turn));
+        // Do not reward repeated exposure: it would permanently starve other thoughts.
         score += Math.min(28, (meta.writes || 0) * 7);
         return score;
     };
@@ -324,7 +563,7 @@ function MindForgeCore(hook) {
         "",
         "Adjust the values below. Keep the colon and space.",
         "",
-        "Enabled: true",
+        "Enabled: false",
         "Player Name: auto",
         "POV (1=1st, 2=2nd, 3=3rd): 2",
         "Model Profile (Stable/Balanced/Full): Balanced",
@@ -347,6 +586,7 @@ function MindForgeCore(hook) {
         "Auto Doctor: true",
         "Bootstrap Empty Brains: true",
         "World Memory: false",
+        "World Cards: false",
         "Memory Slots: true",
         "Thought Quality Gate: true",
         "Max Brain Keys (3-20): 14",
@@ -356,13 +596,15 @@ function MindForgeCore(hook) {
     const configGuideText = [
         "// MindForge Quick Guide:",
         "// Public scenario setup:",
+        "// MindForge starts disabled. Set Enabled: true in this card to start NPC memory.",
         "// 1) Add important NPC names below, one per line. Use commas for aliases.",
         "// Example: Elara, queen, the queen",
         "// 2) Player Name: auto can read resolved setup text like ${Your name?} when the scenario reveals it.",
-        "// 3) Scenario Auto-Discovery can add clear main NPCs from resolved opening/Plot Essentials text.",
+        "// 3) Auto-Discovery selects one clear main NPC. Add other NPCs below it to enable their memories.",
         "// 4) Balanced is the recommended public default. Use Stable for small/cache models.",
         "// 5) Leave Auto Doctor and Agentic Charter on for hands-off NPC minds.",
         "// 6) World Memory is optional and disabled by default; enable it only when shared lore should grow automatically.",
+        "// Language: English narration, dialogue, prompts, and memory notes.",
         "// Tip: A normal story card titled @Elara also registers Elara automatically.",
         "// MindForge handles brain repair, compaction, parser cleanup, and optional world memory automatically.",
         "// You can ignore commands during normal play."
@@ -376,6 +618,18 @@ function MindForgeCore(hook) {
         } catch {
             return null;
         }
+    };
+
+    // Resolve the created card independently of the host's return convention.
+    // Some hosts return an index or no value even with { returnCard: true }.
+    const createStoryCard = (keys, entry, type, title, description) => {
+        const added = addStoryCard(keys, entry, type, title, description, { returnCard: true });
+        const card = added && typeof added === "object" && storyCards.includes(added)
+            ? added : storyCards.find(item => item && item.keys === keys);
+        if (!card) throw new Error("MindForge could not create its story card");
+        if (typeof card.title !== "string" || !card.title) card.title = title;
+        if (typeof card.description !== "string" || !card.description) card.description = description;
+        return card;
     };
 
     const repairBrainCard = (card, agentName) => {
@@ -453,7 +707,7 @@ function MindForgeCore(hook) {
                     missingLines.push(line);
                 }
             };
-            addIfMissing("Enabled: true", key => key.includes("enabled"));
+            addIfMissing("Enabled: false", key => key === "enabled");
             addIfMissing("Player Name: auto", key => key.includes("player name"));
             addIfMissing("POV (1=1st, 2=2nd, 3=3rd): 2", key => key.includes("pov"));
             addIfMissing("Model Profile (Stable/Balanced/Full): Balanced", key => key.includes("model profile"));
@@ -476,6 +730,7 @@ function MindForgeCore(hook) {
             addIfMissing("Auto Doctor: true", key => key.includes("auto doctor"));
             addIfMissing("Bootstrap Empty Brains: true", key => key.includes("bootstrap empty") || key.includes("empty brain"));
             addIfMissing("World Memory: false", key => key.includes("world memory") || key.includes("auto lore"));
+            addIfMissing("World Cards: false", key => key.includes("world cards"));
             addIfMissing("Memory Slots: true", key => key.includes("memory slot"));
             addIfMissing("Thought Quality Gate: true", key => key.includes("quality gate"));
             addIfMissing("Max Brain Keys (3-20): 14", key => key.includes("max brain keys"));
@@ -544,7 +799,7 @@ function MindForgeCore(hook) {
 
         if (!card) {
             const timeStr = new Date().toISOString().replace("T", " ").slice(0, 16);
-            card = addStoryCard(
+            card = createStoryCard(
                 JSON.stringify({ agent: cleanAgent }),
                 `// MindForge Brain Card initialized @ ${timeStr} UTC\n// Operation Log:\n`,
                 "Brain",
@@ -635,115 +890,169 @@ function MindForgeCore(hook) {
     };
 
     const buildDiscoveredAgent = (rawName) => {
-        const cleanName = cleanDiscoveredName(rawName);
-        const canonical = sanitizeAgentName(cleanName);
+        const cleanName = cleanDiscoveredName(String(rawName || "").replace(/^(?:coach|captain|doctor|dr\.?|sir|lady|professor)\s+/i, ""));
+        const canonical = sanitizeAgentName(cleanName.split(/\s+/)[0]);
         if (!canonical || genericPlayerNames.has(canonical.toLowerCase())) return null;
-        const aliases = [];
         const lowerRaw = cleanName.toLowerCase();
-        if (lowerRaw && lowerRaw !== canonical.toLowerCase()) aliases.push(lowerRaw);
-        const words = lowerRaw.split(/\s+/).filter(Boolean);
-        if (words.length > 1) aliases.push(words[words.length - 1]);
-        const uniqueAliases = aliases.filter((item, idx, arr) => item && arr.indexOf(item) === idx);
+        const aliases = [...new Set([canonical.toLowerCase(), lowerRaw].filter(Boolean))];
         return {
             name: canonical,
-            aliases: [canonical.toLowerCase(), ...uniqueAliases],
-            line: [canonical, ...uniqueAliases].join(", ")
+            fullName: cleanName,
+            aliases,
+            line: [canonical, ...aliases.filter(alias => alias !== canonical.toLowerCase())].join(", ")
         };
     };
 
     const discoverScenarioAgents = (config, card) => {
-        if (!config.scenarioDiscovery || !card) return;
-        const source = getScenarioScanText();
+        // Wait for Context so Plot Essentials can identify the main character
+        // before a supporting character in the opening is mistaken for it.
+        if (hook !== "context" || !config.scenarioDiscovery || !card) return;
+        // Discovery fills one main-NPC slot. A later scene must not grow an
+        // automatic cast or replace the established main character.
+        if (MF.mainNpc || config.agents.length) return;
+        if (storyCards.some(item => getAutoNpcName(item))) return;
+        const firstAction = history.find(action => action && action.type === "start") ||
+            history.find(action => action && (action.text || action.rawText));
+        const opening = stripSetupPlaceholders(String(firstAction?.text || firstAction?.rawText || "")).slice(0, 12000);
+        // Use each source once. The old first/last-history concatenation could
+        // count a short opening twice and crowd Plot Essentials out of the scan.
+        const contextSource = hook === "context" ? stripSetupPlaceholders(text).slice(0, 16000) : "";
+        const source = [...new Set([contextSource, opening].filter(Boolean))].join("\n");
         if (!source.trim()) return;
-
-        const candidates = {};
-        const addCandidate = (rawName, npcScore = 0, playerScore = 0, strongNpc = false) => {
-            const cleanName = cleanDiscoveredName(rawName);
-            if (!cleanName) return;
-            const key = cleanName.toLowerCase();
-            const candidate = candidates[key] = candidates[key] || {
-                rawName: cleanName,
-                npcScore: 0,
-                playerScore: 0,
-                strongNpc: false
-            };
-            candidate.npcScore += npcScore;
-            candidate.playerScore += playerScore;
-            candidate.strongNpc = candidate.strongNpc || strongNpc;
+        const unquoted = value => String(value).replace(/["“][^"”]{0,1200}["”]/g, " ");
+        const narrative = unquoted(opening || contextSource);
+        const evidenceText = unquoted(source);
+        const candidates = [];
+        const excluded = new Set([...genericPlayerNames, "she", "he", "they", "we", "it", "her", "his", "their", "our",
+            "the", "then", "now", "there", "here", "everyone", "someone", "nobody", "nothing", "story", "name"]);
+        const excludeName = name => {
+            const agent = buildDiscoveredAgent(name);
+            if (agent) for (const alias of agent.aliases) excluded.add(alias);
         };
-
+        excludeName(config.player);
         const playerHeaders = /^(?:player|player character|protagonist|main character|you|user)$/i;
         const npcHeaders = /^(?:main npc|important npc|primary npc|npc|companion|ally|rival|antagonist|mentor|handler|inner presence|presence|love interest|partner|sidekick|supporting character)$/i;
-        const nonNpcHeaders = /^(?:core|setting|rules|world|location|place|item|object|weapon|system|theme|tone|author'?s note|faction|lore|background|plot|premise)$/i;
-
-        for (const block of extractScenarioBlocks(source)) {
+        const blocks = extractScenarioBlocks(evidenceText);
+        for (const block of blocks) {
             const name = getNamedField(block.body);
-            if (!name) continue;
-            const header = block.header.trim();
-            if (playerHeaders.test(header)) {
-                addCandidate(name, 0, 100, false);
-            } else if (npcHeaders.test(header)) {
-                addCandidate(name, 90, 0, true);
-            } else if (!nonNpcHeaders.test(header)) {
-                addCandidate(name, 10, 0, false);
+            if (name && !npcHeaders.test(block.header.trim())) excludeName(name);
+        }
+        const detectedPlayer = findPlayerNameInText(source);
+        if (detectedPlayer) excludeName(detectedPlayer);
+        // Character cards supply candidate identities, not registrations. Ignore
+        // translation copies and disqualify known places/organizations as people.
+        for (const item of storyCards) {
+            if (!item || /^(?:character|translation|brain)$/i.test(item.type || "")) continue;
+            if (item.title) excluded.add(item.title.trim().toLowerCase());
+            for (const alias of String(item.keys || "").split(",")) {
+                if (alias.trim()) excluded.add(alias.trim().toLowerCase());
             }
         }
-
+        const addCandidate = (rawName, fromCard = false) => {
+            const agent = buildDiscoveredAgent(rawName);
+            if (!agent || excluded.has(agent.name.toLowerCase()) || excluded.has(agent.fullName.toLowerCase())) return null;
+            const exact = candidates.find(item => item.agent.fullName.toLowerCase() === agent.fullName.toLowerCase());
+            if (exact) return exact;
+            if (!fromCard) {
+                const matches = candidates.filter(item => item.agent.aliases.includes(agent.fullName.toLowerCase()));
+                if (matches.length > 1) return null; // An ambiguous first name is not an identity.
+                if (matches.length === 1) return matches[0];
+            }
+            if (candidates.length >= 64) return null;
+            const item = { agent, hint: 0, primary: false, relationship: false, card: fromCard };
+            candidates.push(item);
+            return item;
+        };
+        for (const item of storyCards) {
+            if (!item || String(item.type || "").toLowerCase() !== "character") continue;
+            const candidate = addCandidate(item.title, true);
+            if (!candidate) continue;
+            for (const alias of String(item.keys || "").split(",")) {
+                const clean = cleanPlayerName(alias);
+                if (clean && /^[A-Z]/.test(clean) && !excluded.has(clean.toLowerCase()) &&
+                    !candidate.agent.aliases.includes(clean.toLowerCase())) candidate.agent.aliases.push(clean.toLowerCase());
+            }
+        }
+        const hint = (rawName, score, primary = false) => {
+            const candidate = addCandidate(rawName);
+            if (!candidate) return;
+            candidate.hint = Math.max(candidate.hint, score);
+            candidate.primary ||= primary;
+        };
+        for (const block of blocks) {
+            if (playerHeaders.test(block.header.trim()) || !npcHeaders.test(block.header.trim())) continue;
+            const name = getNamedField(block.body);
+            if (name) hint(name, 90, /^(?:main npc|primary npc)$/i.test(block.header.trim()));
+        }
         const npcPatterns = [
-            { regex: /\bthe person who finds you is\s+([A-Za-z][A-Za-z0-9_' -]{1,40})/ig, score: 80, strong: true },
-            { regex: /\b(?:main|important|primary)\s+(?:npc|character|person|companion)\s+(?:name\s*)?(?:is|:)\s+([A-Za-z][A-Za-z0-9_' -]{1,40})/ig, score: 80, strong: true },
-            { regex: /\bopen only when\s+([A-Za-z][A-Za-z0-9_' -]{1,40})\s+arrives?\b/ig, score: 50, strong: true }
+            { regex: /\bthe person who finds you is\s+([A-Za-z][A-Za-z0-9_' -]{1,40})/ig, score: 80 },
+            { regex: /\b(?:main|primary)\s+(?:npc|companion)\s+(?:name\s*)?(?:is|:)\s+([A-Za-z][A-Za-z0-9_' -]{1,40})/ig, score: 90, primary: true },
+            { regex: /\bopen only when\s+([A-Za-z][A-Za-z0-9_' -]{1,40})\s+arrives?\b/ig, score: 50 }
         ];
         for (const item of npcPatterns) {
             let match;
-            while ((match = item.regex.exec(source)) !== null) {
-                addCandidate(match[1], item.score, 0, item.strong);
-            }
+            while ((match = item.regex.exec(evidenceText)) !== null) hint(match[1], item.score, item.primary);
         }
-
-        const playerPatterns = [
-            /\byour name is\s+([A-Za-z][A-Za-z0-9_' -]{1,40})/ig,
-            /(?:^|\n)\s*(?:player\s+name|player\s+character\s+name|protagonist|your\s+name)\s*[:?=]\s*([A-Za-z][A-Za-z0-9_' -]{1,40})/ig
+        const properName = "[A-Z][A-Za-z0-9_'-]*(?:[ \\t]+[A-Z][A-Za-z0-9_'-]*){0,2}";
+        const relations = [
+            new RegExp(`\\b[Yy]ou and (${properName})\\s+(?:grew up together|fell in love|are married|have been together|have known each other)\\b`, "g"),
+            new RegExp(`\\b[Yy]our (?:partner|wife|husband|girlfriend|boyfriend|spouse|companion) (?:is|is named|is called) (${properName})(?=[.,;!\\n]|$)`, "g"),
+            new RegExp(`\\b(${properName}) is your (?:partner|wife|husband|girlfriend|boyfriend|spouse|companion)\\b`, "g")
         ];
-        for (const pattern of playerPatterns) {
+        for (const pattern of relations) {
             let match;
-            while ((match = pattern.exec(source)) !== null) {
-                addCandidate(match[1], 0, 90, false);
+            while ((match = pattern.exec(evidenceText)) !== null) {
+                const candidate = addCandidate(match[1]);
+                if (candidate) candidate.relationship = true;
             }
         }
-
-        for (const key in candidates) {
-            const candidate = candidates[key];
-            candidate.npcScore += scoreNarrativeNpcUse(candidate.rawName, source);
+        // Seed ordinary prose only from named subjects, never all capitalized words.
+        const verbs = "(?:is|was|has|had|gave|gives?|steps?|walks?|looks?|says?|asks?|replies?|answers?|turns?|watches?|waits?|moves?|leans?|smiles?|laughs?|frowns?|whispers?|shouts?|raises?|shrugs?|picks?|greets?|nods?|arrives?|leaves?|promises?)";
+        const subjects = new RegExp(`(?:^|[.!?]\\s+|\\n)[ \\t]*(?:Then )?(${properName})\\s+${verbs}\\b`, "g");
+        let subject;
+        while ((subject = subjects.exec(narrative)) !== null) addCandidate(subject[1]);
+        for (const candidate of candidates) {
+            const aliases = candidate.agent.aliases.filter(alias => !candidates.some(other =>
+                other !== candidate && other.agent.aliases.includes(alias)));
+            const names = aliases.sort((a, b) => b.length - a.length).map(escapeRegex).join("|");
+            const mentions = names ? new RegExp(`(?:^|[^A-Za-z0-9_])(?:${names})(?=$|[^A-Za-z0-9_])`, "gi") : null;
+            const actions = names ? new RegExp(`(?:^|[^A-Za-z0-9_])(?:${names})\\s+${verbs}\\b`, "gi") : null;
+            candidate.mentions = mentions ? (narrative.match(mentions) || []).length : 0;
+            candidate.actions = actions ? (narrative.match(actions) || []).length : 0;
+            candidate.score = (candidate.primary ? 300 : candidate.hint) + (candidate.relationship ? 80 : 0) +
+                Math.min(12, candidate.mentions) * 4 + Math.min(6, candidate.actions) * 10;
         }
-
-        for (const key in candidates) {
-            const candidate = candidates[key];
-            const agent = buildDiscoveredAgent(candidate.rawName);
-            if (!agent) continue;
-            if (agent.name.toLowerCase() === sanitizeAgentName(config.player).toLowerCase()) continue;
-            if (candidate.npcScore < candidate.playerScore + 35) continue;
-            if (!(candidate.npcScore >= 90 || (candidate.strongNpc && candidate.npcScore >= 70))) continue;
-
-            if (!hasAgentInConfig(config, agent.name)) {
-                config.agents.push({ name: agent.name, aliases: agent.aliases });
-            }
-            const placedLine = upsertAgentLineInConfig(card.description, agent.name, agent.line);
-            if (placedLine.description !== String(card.description || "").trimEnd()) {
-                card.description = placedLine.description;
-            }
-            getBrainCard(agent.name);
-            if (placedLine.added) {
-                bumpHealth("scenarioDiscoveries");
-            }
+        const totalMentions = candidates.reduce((sum, item) => sum + item.mentions, 0);
+        const ranked = candidates.filter(item => item.primary || item.hint >= 80 ||
+            (item.hint >= 50 && item.actions > 0) ||
+            (hook === "context" && ((item.relationship && item.mentions >= 2 && item.actions > 0) ||
+                (item.mentions >= 5 && item.actions >= 3 && item.mentions >= totalMentions * 0.55))))
+            .sort((a, b) => Number(b.primary) - Number(a.primary) || b.score - a.score);
+        const winner = ranked[0];
+        if (!winner || (ranked[1] && winner.primary === ranked[1].primary && winner.score - ranked[1].score < 25)) return;
+        const agent = winner.agent;
+        // Two people sharing a first name require the full identity as trigger.
+        if (candidates.some(other => other !== winner && other.agent.name === agent.name)) {
+            agent.aliases = agent.aliases.filter(alias => alias !== agent.name.toLowerCase());
+            agent.name = sanitizeAgentName(agent.fullName);
         }
+        const line = [agent.name, ...agent.aliases.filter(alias => alias !== agent.name.toLowerCase())].join(", ");
+        const placed = upsertAgentLineInConfig(card.description, agent.name, line);
+        card.description = placed.description;
+        config.agents.push({ name: agent.name, aliases: agent.aliases });
+        if (config.enabled) getBrainCard(agent.name);
+        MF.mainNpc = {
+            name: agent.name,
+            reason: winner.primary ? "explicit" : winner.relationship ? "relationship-and-opening" : winner.hint ? "opening-introduction" : "opening-focus"
+        };
+        if (placed.added) bumpHealth("scenarioDiscoveries");
     };
 
     const getWorldCard = () => {
         let card = storyCards.find(c => c && typeof c.keys === "string" && c.keys.trim().toLowerCase() === "mindforge_world");
         if (!card) {
             const timeStr = new Date().toISOString().replace("T", " ").slice(0, 16);
-            card = addStoryCard(
+            card = createStoryCard(
                 "mindforge_world",
                 `// MindForge World Memory initialized @ ${timeStr} UTC\n// Operation Log:\n`,
                 "World",
@@ -773,6 +1082,22 @@ function MindForgeCore(hook) {
         .replace(/\s+/g, "_")
     );
 
+    const worldNameIn = (source, name) => name && new RegExp(
+        `(?:^|[^\\p{L}\\p{N}_])${escapeRegex(name)}(?=$|[^\\p{L}\\p{N}_])`, "iu"
+    ).test(source);
+
+    const worldFacts = (value, key) => String(value || "").split(/\s+\|\s+/)
+        .map(fact => {
+            const colon = fact.indexOf(":");
+            // Read the old "Entity: sentence" format without repeating the name.
+            return colon > 0 && getWorldKey(fact.slice(0, colon)) === key ? fact.slice(colon + 1).trim() : fact.trim();
+        }).filter(Boolean);
+
+    const getWorldMeta = () => {
+        if (!MF.worldMeta || typeof MF.worldMeta !== "object" || Array.isArray(MF.worldMeta)) MF.worldMeta = {};
+        return MF.worldMeta;
+    };
+
     const extractLoreCandidates = (srcText = "", config = {}) => {
         if (!config.autoLore) return [];
         const source = String(srcText || "")
@@ -783,6 +1108,7 @@ function MindForgeCore(hook) {
         const banned = new Set([
             "recent", "story", "mindforge", "brain", "thoughts", "active", "present",
             "system", "continue", "configuration", "enabled", "player", "true", "false",
+            "today", "tomorrow", "yesterday", "later", "meanwhile", "suddenly", "perhaps", "however",
             String(config.player || "protagonist").toLowerCase()
         ]);
         for (const agent of config.agents || []) {
@@ -790,23 +1116,33 @@ function MindForgeCore(hook) {
             for (const alias of agent.aliases || []) banned.add(String(alias).toLowerCase());
         }
 
+        const known = getWorldMeta();
         const out = [];
         const seen = new Set();
         const sentences = source.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(Boolean);
         const nameRegex = /\b(?:the\s+)?[A-Z][a-zA-Z0-9']+(?:(?:\s+(?:of|the|and)\s+|\s+)[A-Z][a-zA-Z0-9']+){0,3}/g;
         for (const sentence of sentences) {
-            if (sentence.length < 18 || sentence.length > 260) continue;
+            if (sentence.length < 18 || sentence.length > 220 || !/[.!?]$/.test(sentence)) continue;
+            // Public observations only: do not turn quoted, hypothetical or private
+            // beliefs into facts on a world card.
+            if (/["“”`]|^(?:If|Maybe|Perhaps|Suppose|Imagine)\b|\b(?:might|could|would|rumou?rs?|thinks?|believes?|suspects?|imagines?|dreams?|claims?)\b/i.test(sentence)) continue;
+            nameRegex.lastIndex = 0;
             let match;
             while ((match = nameRegex.exec(sentence)) !== null) {
-                const name = match[0].trim().replace(/\s+/g, " ");
-                const lower = name.toLowerCase().replace(/^the\s+/, "");
+                const name = match[0].trim().replace(/^(?:the|a|an|at|in|near|inside|outside|from|beyond|through)\s+/i, "").replace(/\s+/g, " ");
+                const lower = name.toLowerCase();
                 if (lower.length < 4 || banned.has(lower)) continue;
                 if (/^(he|she|they|you|i|we|it)$/i.test(name)) continue;
                 const key = getWorldKey(name);
-                if (!key || seen.has(key) || key.length < 4) continue;
-                seen.add(key);
-                out.push({ key, name, sentence: sentence.slice(0, 220) });
-                if (out.length >= 4) return out;
+                if (!key || key.length < 4 || name.split(" ").some(word => banned.has(word.toLowerCase()))) continue;
+                const prior = sentence.slice(0, match.index);
+                const multiword = name.split(" ").filter(word => /^[A-Z]/.test(word)).length >= 2;
+                if (!multiword && !known[key] && !/\b(?:at|in|to|from|near|inside|within|through)\s+(?:the\s+)?$/i.test(prior)) continue;
+                const id = `${key}:${sentence}`;
+                if (seen.has(id)) continue;
+                seen.add(id);
+                out.push({ key, name, sentence });
+                if (out.length >= 8) return out;
             }
         }
         return out;
@@ -815,11 +1151,24 @@ function MindForgeCore(hook) {
     const compactWorldMemory = (world, maxKeys = 8) => {
         const keys = Object.keys(world).filter(k => k !== "background");
         if (keys.length <= maxKeys) return world;
-        const keep = new Set(keys.slice(-Math.max(1, maxKeys - 1)));
+        const meta = getWorldMeta();
+        const ranked = [...keys].sort((a, b) => (meta[b]?.turn || 0) - (meta[a]?.turn || 0) || keys.indexOf(b) - keys.indexOf(a));
+        const keep = new Set(ranked.slice(0, Math.max(1, maxKeys - 1)));
         const merge = keys.filter(key => !keep.has(key));
-        const parts = merge.map(key => `${key} is ${world[key]}`);
-        for (const key of merge) delete world[key];
-        world.background = `${world.background ? `${world.background}; ` : ""}${parts.join("; ")}`.slice(-1600);
+        const parts = [
+            ...(world.background ? world.background.split(/\s+\|\s+/) : []),
+            ...merge.flatMap(key => worldFacts(world[key], key).map(fact => `${meta[key]?.name || key.replace(/_/g, " ")}: ${fact}`))
+        ];
+        const retained = [];
+        let size = 0;
+        for (let i = parts.length - 1; i >= 0; i--) {
+            if (size + parts[i].length + (retained.length ? 3 : 0) > 1600) continue;
+            retained.unshift(parts[i]);
+            size += parts[i].length + (retained.length > 1 ? 3 : 0);
+        }
+        for (const key of merge) { delete world[key]; delete meta[key]; }
+        if (retained.length) world.background = retained.join(" | ");
+        else delete world.background;
         bumpHealth("worldCompacts");
         return world;
     };
@@ -839,48 +1188,113 @@ function MindForgeCore(hook) {
         if (candidates.length === 0) return;
         const card = getWorldCard();
         const world = deserializeBrain(card.description);
+        const meta = getWorldMeta();
+        const turnHash = getHistoryHash();
         let changed = false;
         for (const item of candidates) {
-            const value = `${item.name}: ${item.sentence}`;
+            const record = meta[item.key] = meta[item.key] || { name: item.name, mentions: 0 };
+            if (record.hash !== turnHash) {
+                record.mentions = Math.min(999, (record.mentions || 0) + 1);
+                record.hash = turnHash;
+                record.turn = currentTurn;
+            }
+            const facts = worldFacts(world[item.key], item.key);
+            if (facts.some(fact => normalizeThought(fact) === normalizeThought(item.sentence))) continue;
+            // Chronological observations, never a fabricated merged summary. Keep
+            // the three most recent distinct complete facts for each entity.
+            const value = [...facts, item.sentence].slice(-3).join(" | ");
             if (world[item.key] === value) continue;
             world[item.key] = value;
             changed = true;
         }
-        if (!changed) return;
-        card.description = serializeWorld(world, config);
-        MF.health.worldWrites = (MF.health.worldWrites || 0) + 1;
-        const logMsg = `// ${phase || "auto"} world memory update\n${candidates.map(item => `world.${item.key} = ${JSON.stringify(world[item.key])};`).join("\n")}`;
-        card.entry = `${card.entry.trim()}\n\n${logMsg}`.trim();
-        if (card.entry.length > 2200) {
-            card.entry = "// Bounded World Operation Log:\n" + card.entry.split("\n\n").slice(-8).join("\n\n");
+        if (changed) {
+            card.description = serializeWorld(world, config);
+            MF.health.worldWrites = (MF.health.worldWrites || 0) + 1;
+            const logMsg = `// ${phase || "auto"} world memory update\n${[...new Set(candidates.map(item => item.key))].join(", ")}`;
+            card.entry = `${card.entry.trim()}\n\n${logMsg}`.trim();
+            if (card.entry.length > 2200) card.entry = "// Bounded World Operation Log:\n" + card.entry.split("\n\n").slice(-8).join("\n\n");
         }
+        for (const key of Object.keys(meta)) if (!Object.prototype.hasOwnProperty.call(world, key)) delete meta[key];
+        syncWorldCards(config, world);
     };
 
-    const getWorldContext = (srcText = "", config = {}) => {
-        if (!config.autoLore) return "";
+    const getWorldContext = (srcText = "", config = {}, hostContext = "", budget = 600) => {
+        if (!config.autoLore || budget < 32) return "";
         const card = storyCards.find(c => c && typeof c.keys === "string" && c.keys.trim().toLowerCase() === "mindforge_world");
         if (!card || typeof card.description !== "string" || !card.description.trim()) return "";
         const world = deserializeBrain(card.description);
-        const sourceLower = String(srcText || "").toLowerCase();
-        const lines = [];
-        for (const key of Object.keys(world)) {
-            if (key === "background") continue;
-            const displayKey = cleanKeyForLLM(key).replace(/_(?:of|the|and)$/i, "");
-            if (sourceLower.includes(displayKey.replace(/_/g, " ").toLowerCase()) || sourceLower.includes(displayKey.toLowerCase())) {
-                lines.push(`- ${displayKey}: ${world[key]}`);
+        const meta = getWorldMeta();
+        const candidates = [];
+        for (const key of Object.keys(world).filter(key => key !== "background")) {
+            const name = meta[key]?.name || key.replace(/_/g, " ");
+            if (worldNameIn(srcText, name) || worldNameIn(srcText, key)) candidates.push({ key, facts: worldFacts(world[key], key), turn: meta[key]?.turn || 0 });
+        }
+        for (const item of String(world.background || "").split(/\s+\|\s+/)) {
+            const colon = item.indexOf(":");
+            if (colon < 1 || !worldNameIn(srcText, item.slice(0, colon))) continue;
+            const key = getWorldKey(item.slice(0, colon));
+            if (!Object.prototype.hasOwnProperty.call(world, key)) candidates.push({ key, facts: [item.slice(colon + 1).trim()], turn: -1 });
+        }
+        candidates.sort((a, b) => b.turn - a.turn);
+        const lines = ["# World Memory:"];
+        const existing = normalizeThought(hostContext);
+        for (const item of candidates.slice(0, Math.min(config.maxLoreKeys || 8, 4))) {
+            const facts = item.facts.filter(fact => !existing.includes(normalizeThought(fact)));
+            const kept = [];
+            for (let i = facts.length - 1; i >= 0; i--) {
+                const trial = [...kept, facts[i]];
+                const line = `- ${item.key}: ${trial.map((fact, index) => `${index ? "earlier: " : ""}${fact}`).join(" | ")}`;
+                if ([...lines, line].join("\n").length <= budget) kept.push(facts[i]);
             }
-            if (lines.length >= Math.min(config.maxLoreKeys || 8, 4)) break;
+            if (kept.length) lines.push(`- ${item.key}: ${kept.map((fact, index) => `${index ? "earlier: " : ""}${fact}`).join(" | ")}`);
         }
-        if (!lines.length && world.background) {
-            lines.push(`- background: ${world.background}`);
+        return lines.length > 1 ? lines.join("\n") : "";
+    };
+
+    const syncWorldCards = (config, suppliedWorld) => {
+        const active = config.enabled && config.autoLore && config.worldCards;
+        const source = storyCards.find(card => card && card.keys === "mindforge_world");
+        const world = suppliedWorld || deserializeBrain(source?.description || "");
+        const meta = getWorldMeta();
+        const marker = /^\/\/ MindForge World Card: ([a-z0-9_]+)\n\/\/ Snapshot: ([a-f0-9]+)/;
+        const signature = card => hashText(JSON.stringify([card.keys, card.entry, card.title, card.type])).toString(16);
+        const stamp = (card, key) => { card.description = `// MindForge World Card: ${key}\n// Snapshot: ${signature(card)}\n// Public observations, oldest first. Editing this card pauses automatic updates.`; };
+        const managed = new Map();
+        for (const card of storyCards) {
+            const match = card && String(card.description || "").match(marker);
+            if (!match) continue;
+            managed.set(match[1], card);
+            if (match[2] !== signature(card)) continue; // Creator edits take precedence.
+            if ((!active || !world[match[1]]) && card.keys) {
+                card.keys = "";
+                stamp(card, match[1]);
+            }
         }
-        return lines.length ? `\n# World Memory:\n${lines.join("\n")}\n` : "";
+        if (!active) return;
+        for (const key of Object.keys(world).filter(key => key !== "background")) {
+            const record = meta[key];
+            if (!record || record.mentions < 2 || !record.name) continue;
+            let card = managed.get(key);
+            if (card && card.description.match(marker)?.[2] !== signature(card)) continue;
+            if (!card && storyCards.some(other => other && (
+                String(other.title || "").trim().toLowerCase() === record.name.toLowerCase() ||
+                String(other.keys || "").split(",").some(trigger => trigger.trim().toLowerCase() === record.name.toLowerCase())
+            ))) continue;
+            const entry = `Public observations (oldest first):\n${worldFacts(world[key], key).join("\n")}`;
+            if (!card) {
+                card = createStoryCard(record.name, entry, "World", record.name, "");
+                bumpHealth("worldCardsCreated");
+            } else if (card.entry === entry && card.keys === record.name) continue;
+            card.keys = record.name;
+            card.entry = entry;
+            stamp(card, key);
+        }
     };
 
     // Read the configuration story card, creating it on first run.
     const parseConfig = () => {
         const config = {
-            enabled: true,
+            enabled: false,
             player: "auto",
             pov: 2,
             chance: 60,
@@ -903,6 +1317,7 @@ function MindForgeCore(hook) {
             autoDoctor: true,
             bootstrap: true,
             autoLore: false,
+            worldCards: false,
             memorySlots: true,
             qualityGate: true,
             maxBrainKeys: 14,
@@ -910,12 +1325,9 @@ function MindForgeCore(hook) {
             agents: []
         };
 
-        let card = storyCards.find(c => c && (
-            (c.title && c.title.trim().toLowerCase().includes("configure mindforge")) ||
-            (typeof c.keys === "string" && c.keys.trim().toLowerCase().includes("mindforge_config"))
-        ));
+        let card = MindForgeConfigCard();
         if (!card) {
-            card = addStoryCard(
+            card = createStoryCard(
                 "mindforge_config",
                 defaultConfigEntry,
                 "class",
@@ -934,7 +1346,7 @@ function MindForgeCore(hook) {
             const key = parts[0].trim().toLowerCase();
             const val = parts[1].trim();
 
-            if (key.includes("enabled")) config.enabled = val.toLowerCase() === "true";
+            if (key === "enabled") config.enabled = val.toLowerCase() === "true";
             else if (key.includes("player name")) config.player = val || "protagonist";
             else if (key.includes("pov")) config.pov = clampInt(val, 2, 1, 3);
             else if (key.includes("model profile")) config.profile = ["stable", "balanced", "full"].includes(val.toLowerCase()) ? val.toLowerCase() : "balanced";
@@ -966,6 +1378,7 @@ function MindForgeCore(hook) {
             else if (key.includes("auto doctor")) config.autoDoctor = val.toLowerCase() !== "false";
             else if (key.includes("bootstrap empty") || key.includes("empty brain")) config.bootstrap = val.toLowerCase() !== "false";
             else if (key.includes("world memory") || key.includes("auto lore")) config.autoLore = val.toLowerCase() !== "false";
+            else if (key.includes("world cards")) config.worldCards = val.toLowerCase() === "true";
             else if (key.includes("memory slot")) config.memorySlots = val.toLowerCase() !== "false";
             else if (key.includes("quality gate")) config.qualityGate = val.toLowerCase() !== "false";
             else if (key.includes("max brain keys")) config.maxBrainKeys = clampInt(val, 14, 3, 20);
@@ -1002,8 +1415,6 @@ function MindForgeCore(hook) {
                 }
             }
         }
-        discoverScenarioAgents(config, card);
-
         // Scan for existing Brain cards to register them as agents
         const seenBrainAgents = {};
         for (const c of storyCards) {
@@ -1013,8 +1424,9 @@ function MindForgeCore(hook) {
                     if (meta && typeof meta.agent === "string") {
                         const name = sanitizeAgentName(meta.agent);
                         if (!name) continue;
-                        repairBrainCard(c, name);
+                        if (config.enabled) repairBrainCard(c, name);
                         if (seenBrainAgents[name] && seenBrainAgents[name] !== c) {
+                            if (!config.enabled) continue;
                             meta.agent = name;
                             meta.enabled = false;
                             meta.duplicate = true;
@@ -1038,17 +1450,20 @@ function MindForgeCore(hook) {
         for (const c of storyCards) {
             const name = getAutoNpcName(c);
             if (name) {
-                if (c.title.trim().startsWith("@")) {
+                if (config.enabled && c.title.trim().startsWith("@")) {
                     c.title = name; // Clean up the title by stripping the '@'
                 }
                 // Pre-create brain card immediately to persist its registration.
-                getBrainCard(name);
+                if (config.enabled) getBrainCard(name);
                 if (!config.agents.some(a => a.name === name)) {
                     config.agents.push({ name, aliases: [name.toLowerCase()] });
                 }
             }
         }
 
+        // Explicit registrations (config, existing brains, and marked cards)
+        // are authoritative. Discovery can fill only an otherwise empty cast.
+        discoverScenarioAgents(config, card);
         return { config, card };
     };
 
@@ -1212,51 +1627,44 @@ function MindForgeCore(hook) {
         return lines.join("\n");
     };
 
-    const normalizeThought = (value = "") => value
+    const normalizeThought = (value = "") => String(value)
+        .normalize("NFC")
         .toLowerCase()
-        .replace(/\d+\s*(?:[-=]*>|→)\s*/g, "")
-        .replace(/[^a-z0-9\s]+/g, " ")
+        .replace(/^\s*\d+\s*(?:[-=]*>|→)\s*/, "")
+        .replace(/[’‘]/g, "'")
         .replace(/\s+/g, " ")
-        .trim();
+        .trim()
+        .replace(/\.$/, "");
 
-    const isDuplicateThought = (brain, newKey, newValue) => {
+    const isDuplicateThought = (brain, newKey, newValue, agentName = "") => {
         const normalized = normalizeThought(newValue);
-        if (normalized.length < 24) return false;
-        const newWords = new Set(normalized.split(" ").filter(word => word.length > 2));
+        if (!normalized) return false;
         for (const key in brain) {
-            if (cleanComparableKey(key) === cleanComparableKey(newKey)) continue;
+            if (cleanComparableKey(key) === cleanComparableKey(newKey) && isVolatileKey(newKey)) continue;
             if (key === "background") continue;
-            const existing = normalizeThought(brain[key]);
-            if (!existing) continue;
-            if (existing.includes(normalized) || normalized.includes(existing)) {
-                return true;
-            }
-            const existingWords = new Set(existing.split(" ").filter(word => word.length > 2));
-            if (newWords.size < 4 || existingWords.size < 4) continue;
-            let overlap = 0;
-            for (const word of newWords) {
-                if (existingWords.has(word)) overlap++;
-            }
-            const score = overlap / Math.min(newWords.size, existingWords.size);
-            if (score >= 0.78) return true;
+            // Similar wording can express opposite beliefs, different actors or amounts.
+            // Only discard a duplicate when the complete normalized claim matches.
+            const existing = normalizePrivateThoughtPerspective(agentName, stripThoughtIndex(brain[key]));
+            if (normalizeThought(existing) === normalized) return true;
         }
         return false;
     };
 
     const getAgentMeta = (agentName, fallback = {}) => {
-        const brainCard = getBrainCard(agentName);
-        let meta = {};
-        if (typeof brainCard.keys === "string") {
-            try {
-                meta = JSON.parse(brainCard.keys) || {};
-            } catch {}
-        }
-        meta.agent = agentName;
-        meta.enabled = meta.enabled !== false;
-        meta.budget = clampInt(meta.budget ?? meta.context ?? fallback.contextPct, fallback.contextPct || 25, 1, 95);
-        meta.chance = clampInt(meta.chance ?? fallback.chance, fallback.chance || 60, 0, 100);
-        brainCard.keys = JSON.stringify(meta);
-        return meta;
+        const meta = parseBrainMeta(getBrainCard(agentName)) || {};
+        // Inherited settings are resolved on each turn, never persisted as overrides.
+        const chanceLimit = fallback.runtimeProfile === "guarded" ? 20
+            : fallback.runtimeProfile === "conservative" ? 40
+            : fallback.profile === "stable" ? 35 : 100;
+        const budgetLimit = fallback.runtimeProfile === "guarded" || fallback.profile === "stable" ? 14
+            : fallback.runtimeProfile === "conservative" ? 20 : 95;
+        return {
+            ...meta,
+            agent: agentName,
+            enabled: meta.enabled !== false,
+            budget: Math.min(budgetLimit, clampInt(meta.budget ?? meta.context, fallback.contextPct ?? 18, 1, 95)),
+            chance: Math.min(chanceLimit, clampInt(meta.chance, fallback.chance ?? 60, 0, 100))
+        };
     };
 
     // Scan recent turns for NPC names and aliases.
@@ -1275,7 +1683,7 @@ function MindForgeCore(hook) {
         );
         const findAlias = (source, alias, strictCapital) => {
             const lower = source.toLowerCase();
-            for (let idx = lower.indexOf(alias); idx !== -1; idx = lower.indexOf(alias, idx + 1)) {
+            for (let idx = lower.lastIndexOf(alias); idx !== -1; idx = idx > 0 ? lower.lastIndexOf(alias, idx - 1) : -1) {
                 const before = idx > 0 ? lower.charCodeAt(idx - 1) : 0;
                 const after = idx + alias.length < lower.length ? lower.charCodeAt(idx + alias.length) : 0;
                 if (isAsciiLetter(before) || isAsciiLetter(after)) continue;
@@ -1305,14 +1713,13 @@ function MindForgeCore(hook) {
             const foundInTurn = [];
 
             for (const agent of config.agents) {
+                let latest = -1;
                 for (const alias of agent.aliases) {
                     const aliasLower = alias.toLowerCase();
                     const idx = findAlias(source, aliasLower, requiresCapital(agent, aliasLower));
-                    if (idx !== -1) {
-                        foundInTurn.push({ name: agent.name, idx });
-                        break;
-                    }
+                    latest = Math.max(latest, idx);
                 }
+                if (latest !== -1) foundInTurn.push({ name: agent.name, idx: latest });
             }
 
             if (foundInTurn.length > 0) {
@@ -1520,32 +1927,18 @@ function MindForgeCore(hook) {
 
     const getLastWriteAge = (agentName) => {
         const turn = MF.lastWrite && MF.lastWrite[agentName];
-        return Number.isInteger(turn) ? Math.max(0, history.length - turn) : Infinity;
+        return Number.isInteger(turn) ? Math.max(0, currentTurn - turn) : Infinity;
     };
 
     const getSlotGuidance = (agentName, config) => {
         if (!config.memorySlots) return "";
         const playerKey = formatMemoryKey(config.player || "player");
-        return [
-            `Prefer scene-specific keys chosen from ${agentName}'s point of view, e.g. fake_papers, heavy_log, broken_promise.`,
-            `Only use durable slots such as relationship_${playerKey}, goal_current, plan_next, or secret_hidden when the scene truly changes that slot.`,
-            `Never use generic throwaway keys like memory_recent, recent_event, current_thought, or note.`,
-            `Use _state_current for temporary emotion or posture; it decays automatically.`,
-            `Use core_* only for durable identity facts about ${agentName}; never use core_* for temporary observations.`
-        ].join("\n");
+        return `Slots: relationship_${playerKey}, goal_current, plan_next, secret_hidden; _state_current expires.`;
     };
 
     const getAgenticCharter = (agentName, config) => {
         if (!config.agenticCharter) return "";
-        return [
-            `Private mind for ${agentName}:`,
-            `- ${agentName} is a continuous agent with private motives, loyalties, fears, secrets, and plans.`,
-            "- Store what changes future behavior: promises, betrayals, discoveries, loyalties, plans, fears, and unresolved choices.",
-            "- Avoid camera notes, summaries, and filler. Write the thought as inner subtext, not analysis.",
-            "- Update the same key only when sharpening the same idea; otherwise create a distinct scene-specific key.",
-            "- Delete or rename weak/stale thoughts when that improves the brain.",
-            "- Keep the hidden operation invisible and continue the story as lived action."
-        ].join("\n");
+        return `Private mind for ${agentName}: private motives, loyalties, fears and plans guide actions, not player knowledge.`;
     };
 
     const chooseBrainTask = (agentName, brain, config, pressure) => {
@@ -1577,54 +1970,42 @@ function MindForgeCore(hook) {
     const getContextLimit = (config) => {
         const max = Number.isFinite(info.maxChars) ? Math.floor(info.maxChars) : 0;
         if (max <= 0) return 0;
-        return Math.max(400, max - Math.min(config.guardBuffer || 600, Math.floor(max * 0.6)));
+        return max - Math.min(config.guardBuffer || 600, Math.floor(max * 0.1));
     };
 
-    const applyContextGuard = (srcText, config) => {
-        const marker = "<|mindforge|>";
-        const limit = getContextLimit(config);
-        if (!limit || srcText.length <= limit) {
-            return srcText.replace(marker, "");
-        }
+    const storyRegion = (source) => {
+        const header = /(?:^|\n)Recent Story:[ \t]*\r?\n?/.exec(source);
+        if (!header) return { start: 0, end: 0, length: 0 };
+        const start = header.index + header[0].length;
+        const next = /\n(?:Memories:|World Lore:|Plot Essentials:|Story Summary:|AI Instructions:|\[Author's note:)/.exec(source.slice(start));
+        const end = next ? start + next.index : source.length;
+        return { start, end, length: end - start };
+    };
 
-        bumpHealth("contextGuards");
-        let guarded = srcText;
-        let excess = guarded.length - limit;
-        const recentNeedle = "Recent Story:";
-        const recentIdx = guarded.indexOf(recentNeedle);
-        const markerIdx = guarded.indexOf(marker);
-        const protectedStart = markerIdx === -1 ? guarded.length : markerIdx;
+    const trimOldStory = (source, count) => {
+        const region = storyRegion(source);
+        const remove = Math.min(Math.max(0, count), region.length);
+        return source.slice(0, region.start) + source.slice(region.start + remove);
+    };
 
-        if (recentIdx !== -1 && recentIdx < protectedStart) {
-            const storyStart = recentIdx + recentNeedle.length;
-            const storyLength = protectedStart - storyStart;
-            const keepRecent = Math.min(2000, Math.floor(limit * 0.45));
-            const remove = Math.min(
-                excess,
-                Math.floor(storyLength * 0.85),
-                Math.max(0, storyLength - keepRecent)
-            );
-            if (remove > 0) {
-                guarded = `${guarded.slice(0, storyStart)}${guarded.slice(storyStart + remove)}`;
-                excess -= remove;
+    const contextBudget = (source, config, cacheMode) => {
+        const max = Number.isFinite(info.maxChars) ? Math.max(0, Math.floor(info.maxChars)) : source.length;
+        const limit = cacheMode ? Math.max(0, max - 160) : getContextLimit(config);
+        let base = source;
+        // Repair an already oversized host input independently of our additions.
+        // Normal additions may only displace old Recent Story, never host rules.
+        if (!cacheMode && base.length > max) {
+            base = trimOldStory(base, base.length - max);
+            if (base.length > max) {
+                const head = Math.floor(max / 2);
+                base = base.slice(0, head) + (max > head ? base.slice(-(max - head)) : "");
             }
         }
-
-        if (excess > 0) {
-            const newMarkerIdx = guarded.indexOf(marker);
-            const protectAt = newMarkerIdx === -1 ? guarded.length : newMarkerIdx;
-            const remove = Math.min(excess, Math.max(0, protectAt - 500));
-            if (remove > 0) {
-                guarded = guarded.slice(remove);
-                excess -= remove;
-            }
-        }
-
-        if (excess > 0 && guarded.length > limit) {
-            guarded = guarded.slice(guarded.length - limit);
-        }
-
-        return guarded.replace(marker, "");
+        const region = storyRegion(base);
+        const keep = Math.min(region.length, Math.max(160, Math.min(2000, Math.floor(limit * 0.5))));
+        const removable = cacheMode ? 0 : Math.min(Math.max(0, region.length - keep), Math.floor(limit * 0.25));
+        const available = Math.max(0, limit - base.length + removable);
+        return { base, available, limit, max };
     };
 
     const hasDirectDialogPressure = () => {
@@ -1635,8 +2016,17 @@ function MindForgeCore(hook) {
 
     const applyAdaptiveProfile = (config) => {
         const next = { ...config, agents: config.agents };
-        const failureScore = (MF.health.emptyOutputs || 0) + (MF.health.skippedCommits || 0) + (MF.health.memoryOnlyOutputs || 0) + ((MF.health.errors || 0) * 2);
-        const pressureScore = (MF.health.contextGuards || 0) + ((MF.health.loadSheds || 0) * 2);
+        const failures = (MF.health.emptyOutputs || 0) + (MF.health.skippedCommits || 0) + (MF.health.memoryOnlyOutputs || 0) + ((MF.health.errors || 0) * 2);
+        const pressures = (MF.health.contextGuards || 0) + ((MF.health.loadSheds || 0) * 2);
+        const hash = getHistoryHash();
+        const adaptive = MF.adaptive = MF.adaptive || { hash, failures: 0, pressures: 0, failureScore: 0, pressureScore: 0 };
+        const newTurn = hook === 'context' && adaptive.hash !== hash;
+        adaptive.failureScore = Math.max(0, adaptive.failureScore - (newTurn ? 1 : 0)) + Math.max(0, failures - adaptive.failures);
+        adaptive.pressureScore = Math.max(0, adaptive.pressureScore - (newTurn ? 1 : 0)) + Math.max(0, pressures - adaptive.pressures);
+        adaptive.failures = failures;
+        adaptive.pressures = pressures;
+        if (hook === 'context') adaptive.hash = hash;
+        const { failureScore, pressureScore } = adaptive;
         let mode = config.profile;
 
         if (failureScore >= 5 || pressureScore >= 6) {
@@ -1668,13 +2058,9 @@ function MindForgeCore(hook) {
             .replace(/<!--mf:[a-zA-Z0-9_]+-->/g, "")
             .replace(/\u200B[\u200C\u200D]+\u200B/g, "")
             .trim();
-        if (!/[A-Za-z0-9]/.test(clean) || clean.length < 8) return false;
-        if (/^(as an ai|as a language model|sorry\b|i am unable|i'm unable)\b/i.test(clean)) {
-            return false;
-        }
-        if (/\b(?:cannot|can't)\s+comply\b/i.test(clean)) return false;
-        const words = clean.split(/\s+/).filter(Boolean);
-        return words.length >= 2 || clean.length >= 16;
+        // Cleanup has already removed protocol scaffolding. Short replies,
+        // apologies and in-character refusals are valid story, too.
+        return /[\p{L}\p{N}]/u.test(clean);
     };
 
     const compactSpacedLetters = (value = "") => String(value || "")
@@ -1860,46 +2246,15 @@ function MindForgeCore(hook) {
         .replace(/\s+/g, " ")
         .trim();
 
-    const deepenFallbackThought = (value = "") => {
-        let clean = fixFirstPersonGrammar(cleanOperationValueLiteral(value));
-        if (/^I\s+don[’']?t\s+step\s+closer\.?$/i.test(clean)) {
-            return "I keep my distance because I do not trust what this moment is becoming.";
-        }
-        if (/^I\s+don[’']?t\s+(?:move|come closer|approach)\.?$/i.test(clean)) {
-            return "I keep still because moving closer feels like giving up control.";
-        }
-        if (/^I\s+(?:stay|stand)\s+(?:still|silent)\.?$/i.test(clean)) {
-            return "I stay still because I am not ready to give this moment an answer.";
-        }
-        if (/^I\s+look\s+(?:at|toward)\b/i.test(clean) && clean.length < 70) {
-            return `${clean.replace(/\.$/, "")} because I am trying to understand what it means for me.`;
-        }
-        if (/^That[’']?s\s+why\b/i.test(clean)) {
-            return `I understand now: ${clean.charAt(0).toLowerCase()}${clean.slice(1)}`;
-        }
-        if (/^It\s+(?:means|proves|shows)\b/i.test(clean)) {
-            return `I cannot ignore it: ${clean.charAt(0).toLowerCase()}${clean.slice(1)}`;
-        }
-        return clean;
-    };
-
     const normalizePrivateThoughtPerspective = (agentName, value = "", config = {}) => {
-        const playerName = cleanPlayerName(config.player) || String(config.player || "protagonist").trim();
         const agent = sanitizeAgentName(agentName);
-        const playerPattern = playerName ? escapeRegex(playerName) : "protagonist";
-        const agentSubject = agent ? `(?:${escapeRegex(agent)}|she|he|they)` : "(?:she|he|they)";
-        const thoughtPrefix = "((?:I\\s+(?:need|must)\\s+to\\s+remember\\s+this|I\\s+remember|I\\s+notice|I\\s+need\\s+to\\s+understand[^:]{0,90}|I\\s+feel[^:]{0,90})\\s*:\\s*)?";
-        const normalized = String(value || "")
-            .replace(new RegExp(`^${thoughtPrefix}${playerPattern}\\s+${observerVerbPattern}\\s+my\\s+eyes\\b`, "i"), "$1my eyes")
-            .replace(new RegExp(`\\b${agent ? escapeRegex(agent) : "__never__"}'s\\s+(${privateBodyNounPattern})\\b`, "ig"), "my $1")
-            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)${agentSubject}\\s+doesn[’']?t\\b`, "ig"), "$1I don't")
-            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)${agentSubject}\\s+does\\s+not\\b`, "ig"), "$1I do not")
-            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)${agentSubject}\\s+goes\\s+rigid\\b`, "ig"), "$1my body goes rigid")
-            .replace(new RegExp(`(^|[.!?]["'\u201c\u201d]?\\s+)${agentSubject}\\s+([A-Za-z]+)\\b`, "ig"), (match, prefix, verb) => `${prefix}I ${toFirstPersonVerb(verb)}`)
-            .replace(new RegExp(`\\b(?:her|his|their)\\s+(${privateBodyNounPattern})\\b`, "ig"), "my $1")
-            .replace(/\b(?:herself|himself|themselves)\b/ig, "myself")
-            .replace(/\s+/g, " ")
-            .trim();
+        let normalized = String(value || "").replace(/\s+/g, " ").trim();
+        if (agent) {
+            // A named subject establishes ownership; she/he/their can be someone
+            // else. Preserve all other actors, possessives and quoted speech.
+            normalized = normalized.replace(new RegExp(`^${escapeRegex(agent)}\\s+([A-Za-z]+)\\b`, "i"),
+                (_, verb) => `I ${toFirstPersonVerb(verb)}`);
+        }
         return fixFirstPersonGrammar(normalized);
     };
 
@@ -1953,232 +2308,38 @@ function MindForgeCore(hook) {
     };
 
     const buildFallbackMemoryOp = (agentName, storyText = "", config = {}) => {
-        // Generic fallback: if the model ignores the hidden operation format, build one
-        // conservative, scene-specific thought from the visible prose. This must never
-        // contain showcase-only names, locations, or hand-authored scenario assumptions.
-        const playerName = cleanPlayerName(config.player) || String(config.player || "protagonist").trim() || "protagonist";
-        const agent = sanitizeAgentName(agentName) || "agent";
-        let source = String(storyText || "")
-            .replace(/<SYSTEM>[\s\S]*?<\/SYSTEM>/g, " ")
-            .replace(/<!--mf:[a-zA-Z0-9_]+-->/g, " ")
-            .replace(/\u200B[\u200C\u200D]*\u200B?/g, " ")
-            .replace(/\[[+=-][^\]]+\]/g, " ")
-            .replace(/\([^\n()]{0,80}[+=-][^\n()]{0,220}\)/g, " ");
-        source = stripMemoryOperationLeaks(stripCodeDebugLeaks(stripUiChromeLeaks(source).text).text).text.replace(/\s+/g, " ").trim();
-        if (!source) return null;
-
-        const ensureSentenceEnd = (value = "") => /[.!?]$/.test(value.trim()) ? value.trim() : `${value.trim()}.`;
-        const agentLower = agent.toLowerCase();
-        const playerLower = playerName.toLowerCase();
-        const bannedKeyTokens = new Set([
-            "the", "and", "but", "with", "from", "into", "onto", "this", "that", "there", "then",
-            "she", "her", "hers", "him", "his", "they", "them", "their", "you", "your", "yours",
-            "said", "says", "asked", "asks", "looked", "looks", "eyes", "face", "voice", "hand", "hands",
-            agentLower, playerLower, "protagonist", "agent"
-        ]);
-
-        const makeOp = (key, value, score = 100) => {
-            const cleanKey = formatMemoryKey(key);
-            const cleanValue = ensureSentenceEnd(cleanOperationValueLiteral(value)).slice(0, 220);
-            if (!cleanKey || isWeakMemoryKey(cleanKey) || isCodeDebugLeakLine(cleanKey) || /memory[ _-]?operation/i.test(cleanKey)) return null;
-            if (score < 55) return null;
-            if (hasTemplateThoughtPrefix(cleanValue) || isCodeDebugLeakLine(cleanValue) || /memory[ _-]?operation/i.test(cleanValue)) return null;
-            return { type: "set", key: cleanKey, val: cleanValue, tagKey: cleanKey, fallback: true };
-        };
-
-        const rawSentences = source
-            .split(/(?<=[.!?])\s+|\n+/)
-            .map(item => item.trim().replace(/^['"`“”]+|['"`“”]+$/g, ""))
-            .filter(item => item.length >= 14 && item.length <= 260 && !isUiChromeLeakLine(item) && !isCodeDebugLeakLine(item));
-        if (!rawSentences.length) return null;
-
-        const durablePattern = /\b(?:promise|promised|betray|betrayed|betrayal|lie|lied|secret|truth|proof|evidence|memory|remember|forgive|forgiveness|trust|choice|choose|family|home|loyalty|fear|afraid|trap|danger|dead|fake|letter|papers|key|door|name|love|wife|husband|friend|enemy|son|daughter|mother|father|blood|debt|oath|guilt|shame|hurt|wound)\b/i;
-        const pressurePattern = /\b(?:no|not|never|can't|cannot|won't|doesn'?t|refuses?|demands?|asks?|question|answer|why|how|what)\b/i;
-        const statePattern = /\b(?:tense|guarded|rigid|tight|stiff|cold|flat|quiet|firm|tired|hurt|shaken|uneasy|suspicious|hesitates?|flinch(?:es|ed)?|panic|angry|soften(?:s|ed)?|fear|afraid)\b/i;
-
-        const scoreSentence = (sentence, order) => {
-            const lower = sentence.toLowerCase();
-            let score = Math.max(0, 20 - order);
-            if (agentLower && lower.includes(agentLower)) score += 25;
-            if (playerLower && lower.includes(playerLower)) score += 25;
-            if (durablePattern.test(sentence)) score += 45;
-            if (pressurePattern.test(sentence)) score += 18;
-            if (statePattern.test(sentence)) score += 12;
-            if (/["“”]/.test(sentence)) score += 8;
-            if (/\?/.test(sentence)) score += 10;
-            if (/\b(?:corridor|room|floor|wall|table|boots?|eyes?|breath|hands?|voice|sound|shutter|tile)\b/i.test(sentence) && !durablePattern.test(sentence)) score -= 18;
-            if (/^(?:above|below|nearby|somewhere|the sound|the room|the corridor)\b/i.test(sentence)) score -= 25;
-            return { sentence, order, score };
-        };
-
-        const top = rawSentences.map(scoreSentence).sort((a, b) => (b.score - a.score) || (a.order - b.order))[0];
-        if (!top || top.score < 55) return null;
-
-        const buildKey = (sentence = "") => {
-            const clean = sentence
-                .replace(new RegExp(`\\b${escapeRegex(agent)}\\b`, "ig"), " ")
-                .replace(new RegExp(`\\b${escapeRegex(playerName)}\\b`, "ig"), " ")
-                .replace(/[^A-Za-z0-9_' -]+/g, " ")
-                .toLowerCase();
-            const tokens = [];
-            for (const raw of clean.split(/\s+/)) {
-                const token = raw.replace(/^_+|_+$/g, "").replace(/'s$/i, "");
-                if (!token || token.length < 3 || bannedKeyTokens.has(token)) continue;
-                if (/^(?:ing|ion|tion|ment)$/.test(token)) continue;
-                if (!tokens.includes(token)) tokens.push(token);
-                if (tokens.length >= 3) break;
-            }
-            if (tokens.length >= 2) return tokens.slice(0, 3).join("_");
-            if (tokens.length === 1) return `${tokens[0]}_${hashText(sentence).toString(36).slice(0, 3)}`;
-            return `scene_${hashText(sentence).toString(36).slice(0, 4)}`;
-        };
-
-        const cleanEventForThought = (sentence = "") => {
-            const agentPattern = escapeRegex(agent);
-            const playerPattern = escapeRegex(playerName);
-            let clean = String(sentence || "")
-                .replace(new RegExp(`^${playerPattern}\\s*[,;:!?-]+\\s*`, "i"), "")
-                .replace(new RegExp(`\\s*[,;:!?-]+\\s*${playerPattern}\\s*([.!?])?$`, "i"), "$1")
-                .replace(new RegExp(`\\b${agentPattern}'s\\b`, "ig"), "my")
-                .replace(/\b[Yy]our\b/g, `${playerName}'s`)
-                .replace(/\b[Yy]ou\b/g, playerName)
-                .replace(new RegExp(`,\\s*["'“”]?\\s*(?:${agentPattern}|she|he|they)\\s+(?:says?|asks?|echoes?|replies?|answers?|whispers?|shouts?)\\b[^.!?]*(?=[.!?]?$)`, "i"), "")
-                .replace(new RegExp(`^(?:${agentPattern}|she|he|they)\\s+(?:says?|asks?|replies?|answers?|whispers?)\\s*[,;:-]?\\s*`, "i"), "")
-                .replace(/^["'“”]+|["'“”]+$/g, "")
-                .replace(/\s+/g, " ")
-                .trim();
-            clean = normalizePrivateThoughtPerspective(agent, clean, config);
-            clean = clean
-                .replace(/\bmy voice is\b.*$/i, "")
-                .replace(/\bmy eyes are\b.*$/i, "")
-                .replace(/^my breath catches\b/i, "My body gives away what I am trying to hide")
-                .replace(/^my eyes keep flicking\b/i, "I keep measuring what this moment is becoming")
-                .trim();
-            if (new RegExp(`^${agentPattern}\\s+`, "i").test(clean)) {
-                clean = clean.replace(new RegExp(`^${agentPattern}\\s+`, "i"), "I ");
-            }
-            clean = deepenFallbackThought(clean);
-            if (!/^(?:I|My|The|This|That|[A-Z][a-z]+)\b/.test(clean)) {
-                clean = `I cannot ignore that ${clean.charAt(0).toLowerCase()}${clean.slice(1)}`;
-            }
-            clean = fixFirstPersonGrammar(clean);
-            return ensureSentenceEnd(clean).slice(0, 190);
-        };
-
-        const key = buildKey(top.sentence);
-        const event = cleanEventForThought(top.sentence);
-        if (!event || event.length < 12 || hasTemplateThoughtPrefix(event) || isCodeDebugLeakLine(event)) return null;
-        return makeOp(key, event, top.score);
-    };
-
-    const hasComparableKey = (brain, baseKey) => {
-        const target = cleanComparableKey(baseKey);
-        for (const key in brain) {
-            if (cleanComparableKey(key) === target) return true;
+        // A fallback may record an explicit commitment, never infer a motive from
+        // body language, unattributed dialogue, or an ambiguous pronoun.
+        const agent = sanitizeAgentName(agentName);
+        if (!agent) return null;
+        const actor = escapeRegex(agent);
+        const verbs = { promises: "promise", promised: "promised", vows: "vow", vowed: "vowed", plans: "plan", planned: "planned", intends: "intend", intended: "intended" };
+        const pattern = new RegExp(`^${actor}\\s+(promises|promised|vows|vowed|plans|planned|intends|intended)\\s+(.+)[.]$`);
+        const names = new Set([config.player, ...(config.agents || []).map(item => item.name)]);
+        const ignored = new Set(["the", "and", "that", "will", "would", "until", "with", "from", "before", "after", "must"]);
+        for (const sentence of String(storyText || "").split(/(?<=[.!?])\s+|\n+/)) {
+            const match = sentence.trim().match(pattern);
+            if (!match) continue;
+            let complement = match[2];
+            // Explicitly repeated actor is safe to convert; she/he/they is not.
+            complement = complement.replace(new RegExp(`\\bthat ${actor} (will|would)\\b`), "that I $1");
+            if (/\b(?:she|he|they|her|his|their|him|them|you|your|we|our)\b|["“”`]/i.test(complement)) continue;
+            const promise = /^(?:promise|vow)/.test(match[1]);
+            const validComplement = /^(?:not )?to\s+\S/.test(complement) ||
+                (promise && /^that I (?:will|would)\s+\S/.test(complement)) ||
+                (promise && [...names].some(name => name && name !== agent && (
+                    complement.startsWith(`${name} to `) || complement.startsWith(`${name} that I will `) || complement.startsWith(`${name} that I would `)
+                )));
+            if (!validComplement) continue;
+            const val = `I ${verbs[match[1]]} ${complement}.`;
+            if (val.length > 220) continue;
+            const terms = (complement.toLowerCase().match(/[a-z]{3,}/g) || [])
+                .filter(word => !ignored.has(word) && ![...names].some(name => String(name || "").toLowerCase() === word));
+            if (!terms.length) continue;
+            const key = formatMemoryKey(`${promise ? "promise" : "plan"}_${[...new Set(terms)].slice(0, 2).join("_")}`);
+            return { type: "set", key, val, tagKey: key, fallback: true };
         }
-        return false;
-    };
-
-    const normalizeOperationContent = (content, brain) => {
-        let src = String(content || "").trim().replace(/==+/g, "=").replace(/::+/g, ":");
-        src = src
-            .replace(/^[-=]{1,}\s*memory[ _-]?operation\s*[:=]\s*/i, "")
-            .replace(/^memory[ _-]?operation\s*[:=]\s*/i, "")
-            .replace(/\s*=[-=]{1,}\s*$/g, "")
-            .trim();
-        if (!src) return null;
-
-        const deleteMatch = src.match(/^(?:[-]\s*|del(?:et(?:e[ds]?|ing))?|for(?:get(?:s|ting)?|got(?:ten)?)|remov(?:e[ds]?|ing))\s+([a-zA-Z0-9_\s()]+)$/i);
-        if (deleteMatch) {
-            const key = formatMemoryKey(deleteMatch[1]);
-            return key ? `[-${key}]` : null;
-        }
-
-        const signedMatch = src.match(/^([+=-])\s*([a-zA-Z0-9_\s()]+?)(?:\s*[=:]\s*([\s\S]+))?$/);
-        if (signedMatch) {
-            const sign = signedMatch[1];
-            const key = formatMemoryKey(signedMatch[2]);
-            const value = cleanOperationValueLiteral(signedMatch[3] || "");
-            if (!key) return null;
-            if (sign === "-") return `[-${key}]`;
-            if (!value) return null;
-            if (sign === "=") return `[=${key}: ${formatMemoryKey(value)}]`;
-            return `[+${key}: ${value}]`;
-        }
-
-        const delimiter = src.includes("=") ? "=" : src.includes(":") ? ":" : "";
-        if (!delimiter) return null;
-        const idx = src.indexOf(delimiter);
-        const key = formatMemoryKey(src.slice(0, idx));
-        const value = cleanOperationValueLiteral(src.slice(idx + 1));
-        if (!key || !value) return null;
-
-        const cleanValueKey = formatMemoryKey(value);
-        if (!value.includes(" ") && cleanValueKey && hasComparableKey(brain, cleanValueKey)) {
-            return `[=${key}: ${cleanValueKey}]`;
-        }
-        return `[+${key}: ${value}]`;
-    };
-
-    const normalizeMemoryOperationWrappers = (srcText, brain) => String(srcText || "").replace(/[-=]{1,}\s*memory[ _-]?operation\s*[:=]\s*([\s\S]{1,260}?)\s*=[-=]{1,}/gi, (raw, content) => {
-        const normalized = normalizeOperationContent(content, brain);
-        return normalized ? ` ${normalized} ` : " ";
-    });
-
-    const normalizeOperationSyntax = (srcText, brain) => {
-        srcText = normalizeMemoryOperationWrappers(srcText, brain);
-        srcText = String(srcText || "").split("\n").map(line => {
-            if (!isMemoryOperationLeakLine(line)) return line;
-            const normalized = normalizeOperationContent(line, brain);
-            return normalized || "";
-        }).join("\n");
-        const candidates = [];
-        const blockRegex = /([(\[{])\s*([\s\S]{1,260}?)\s*([)\]}])/g;
-        let match;
-        while ((match = blockRegex.exec(srcText)) !== null) {
-            const normalized = normalizeOperationContent(match[2], brain);
-            if (!normalized) continue;
-            const sign = normalized.match(/^\[\s*([+=-])/)?.[1] || "";
-            const score = (sign === "=" ? 3 : sign === "+" ? 2 : 1) + (match.index === 0 ? 2 : 0);
-            candidates.push({ raw: match[0], normalized, score, index: match.index });
-        }
-        if (!candidates.length) {
-            const leading = srcText.trimStart();
-            const offset = srcText.length - leading.length;
-            const looseDelete = leading.match(/^(?:del(?:et(?:e[ds]?|ing))?|for(?:get(?:s|ting)?|got(?:ten)?)|remov(?:e[ds]?|ing))\s+([a-zA-Z0-9_\s()]{1,80})(?=[.!?\n]|$)/i);
-            if (looseDelete) {
-                const normalized = normalizeOperationContent(`delete ${looseDelete[1]}`, brain);
-                if (normalized) {
-                    bumpHealth("parserLooseOps");
-                    return `${srcText.slice(0, offset)}${normalized}${leading.slice(looseDelete[0].length)}`;
-                }
-            }
-            const looseAssign = leading.match(/^([a-zA-Z0-9_\s()]{1,80})\s*([=:])\s*([^.!?\n]{4,180}[.!?]?)/);
-            if (looseAssign) {
-                const normalized = normalizeOperationContent(`${looseAssign[1]}${looseAssign[2]}${looseAssign[3]}`, brain);
-                if (normalized) {
-                    bumpHealth("parserLooseOps");
-                    return `${srcText.slice(0, offset)}${normalized}${leading.slice(looseAssign[0].length)}`;
-                }
-            }
-            return srcText;
-        }
-
-        candidates.sort((a, b) => (b.score - a.score) || (a.index - b.index));
-        const chosen = candidates[0];
-        let usedChosen = false;
-        const nextText = srcText.replace(blockRegex, (raw, open, content) => {
-            const normalized = normalizeOperationContent(content, brain);
-            if (!normalized) return raw;
-            if (!usedChosen && raw === chosen.raw && normalized === chosen.normalized) {
-                usedChosen = true;
-                return normalized;
-            }
-            return "";
-        }).replace(/\s{2,}/g, " ");
-
-        bumpHealth(candidates.length > 1 ? "parserMultiOps" : "parserNormalizations");
-        return nextText;
+        return null;
     };
 
     const cleanupAgentRuntimeMeta = (agentName, brain) => {
@@ -2213,7 +2374,6 @@ function MindForgeCore(hook) {
         if (!config.autoDoctor) return;
 
         const currentHash = getHistoryHash();
-        const currentTurn = history.length;
         if (phase !== "output" && MF.doctor.hash === currentHash && MF.doctor.turn === currentTurn) return;
         MF.doctor.hash = currentHash;
         MF.doctor.turn = currentTurn;
@@ -2291,8 +2451,23 @@ function MindForgeCore(hook) {
     // ==================== HOOK ROUTING ====================
 
     let { config } = parseConfig();
+    // Disabling automation deactivates untouched managed triggers on the next hook.
+    if (config.worldCards || storyCards.some(card => card && String(card.description || "").startsWith("// MindForge World Card:"))) syncWorldCards(config);
 
     if (!config.enabled) {
+        const cleanPendingTask = hook === "output" && MF.delivery?.task && !MF.delivery.consumed;
+        MF.agent = "";
+        MF.scene = { agent: "", ttl: 0 };
+        MF.pendingMemory = { agent: "", hash: "", turn: -999 };
+        MF.delivery = { hash: getHistoryHash(), agent: "", task: false, consumed: true };
+        if (hook === "context") {
+            MF.contextStats = {
+                mode: "disabled", inputChars: text.length, returnedChars: text.length,
+                addedChars: 0, removedChars: 0, memoryChars: 0,
+                task: false, compact: false, prefixPreserved: true, englishRequested: false
+            };
+        }
+        if (cleanPendingTask && parsedOutput) text = parsedOutput.text || "\u200B";
         return;
     }
     config = applyAdaptiveProfile(config);
@@ -2312,6 +2487,7 @@ function MindForgeCore(hook) {
                     outputMsg += `Configuration:\n`;
                     outputMsg += `- Enabled: ${config.enabled}\n`;
                     outputMsg += `- Player Name: ${config.player}\n`;
+                    outputMsg += `- Language: English\n`;
                     outputMsg += `- Model Profile: ${config.profile}\n`;
                     outputMsg += `- Runtime Profile: ${config.runtimeProfile || config.profile}\n`;
                     outputMsg += `- Scenario Auto-Discovery: ${config.scenarioDiscovery}\n`;
@@ -2324,6 +2500,7 @@ function MindForgeCore(hook) {
                     outputMsg += `- Auto Doctor: ${config.autoDoctor}\n`;
                     outputMsg += `- Bootstrap Empty Brains: ${config.bootstrap}\n`;
                     outputMsg += `- World Memory: ${config.autoLore}\n`;
+                    outputMsg += `- World Cards: ${config.worldCards}\n`;
                     outputMsg += `- Memory Slots: ${config.memorySlots}\n`;
                     outputMsg += `- Thought Quality Gate: ${config.qualityGate}\n`;
                     outputMsg += `- Max Brain Keys: ${config.maxBrainKeys}\n`;
@@ -2502,7 +2679,38 @@ function MindForgeCore(hook) {
 
     // 2. CONTEXT HOOK: Multi-NPC thoughts injection and decay
     if (hook === "context") {
+        const originalContext = text;
+        const cacheMode = info.useCacheEfficient === true;
+        const allocation = contextBudget(originalContext, config, cacheMode);
+        let base = allocation.base;
+        const suffixRoom = allocation.available;
+        const englishRule = "Write all narration, dialogue and thoughts in English.";
+        const hasEnglishRule = base.split(/\r?\n/).some(line => line.trim() === englishRule);
+        const turnHash = getHistoryHash();
+        MF.contextTurn = MF.contextTurn || { hash: "", decayed: {}, seen: {} };
+        if (MF.contextTurn.hash !== turnHash) MF.contextTurn = { hash: turnHash, decayed: {}, seen: {} };
         MF.agent = "";
+        MF.pendingMemory = { agent: "", hash: "", turn: -999 };
+        MF.delivery = { hash: turnHash, agent: "", task: false, consumed: false };
+        const finishContext = (parts, task = false, memoryChars = 0, compact = false) => {
+            const suffix = parts.filter(Boolean).map(part => `\n\n${part}`).join("");
+            if (!cacheMode && suffix) {
+                base = trimOldStory(base, Math.max(0, base.length + suffix.length - allocation.limit));
+            }
+            text = base + suffix;
+            const removedChars = Math.max(0, originalContext.length - base.length);
+            if (removedChars && !MF.contextTurn.guarded) {
+                bumpHealth("contextGuards");
+                MF.contextTurn.guarded = true;
+            }
+            MF.contextStats = {
+                mode: cacheMode ? "cache" : "standard", available: suffixRoom,
+                inputChars: originalContext.length, addedChars: suffix.length, removedChars,
+                returnedChars: text.length, memoryChars, task, compact,
+                prefixPreserved: text.startsWith(originalContext),
+                englishRequested: text.includes(englishRule)
+            };
+        };
 
         // Auto-pin config card if enabled
         if (config.pin) {
@@ -2520,44 +2728,41 @@ function MindForgeCore(hook) {
         }
 
         let activeAgents = detectTriggers(config).filter(name => getAgentMeta(name, config).enabled);
-        if (
-            MF.scene.agent &&
-            !activeAgents.includes(MF.scene.agent) &&
-            recentHistoryMentionsAgent(config, MF.scene.agent) &&
-            getAgentMeta(MF.scene.agent, config).enabled
-        ) {
-            activeAgents.push(MF.scene.agent);
-        }
         if (MF.scene.agent && activeAgents.includes(MF.scene.agent) && activeAgents[0] !== MF.scene.agent && MF.scene.ttl > 0) {
             activeAgents = [MF.scene.agent, ...activeAgents.filter(name => name !== MF.scene.agent)];
-            MF.scene.ttl--;
-            bumpHealth("sceneLocks");
+            if (!MF.contextTurn.routed) {
+                MF.scene.ttl--;
+                bumpHealth("sceneLocks");
+            }
         }
-        const limit = getContextLimit(config);
-        const pressure = limit ? text.length / limit : 0;
+        activeAgents = activeAgents.slice(0, config.maxAgents);
+        const pressure = suffixRoom < 200 ? 1 : suffixRoom < 500 ? 0.8 : 0;
         if (pressure > 0.92 && activeAgents.length > 1) {
             activeAgents = activeAgents.slice(0, 1);
-            bumpHealth("loadSheds");
+            if (!MF.contextTurn.routed) bumpHealth("loadSheds");
         } else if (pressure > 0.78 && activeAgents.length > 2) {
             activeAgents = activeAgents.slice(0, 2);
-            bumpHealth("loadSheds");
+            if (!MF.contextTurn.routed) bumpHealth("loadSheds");
         }
 
         if (activeAgents.length === 0) {
             MF.scene = { agent: "", ttl: 0 };
-            text = text
-                .replace(/<!--mf:[a-zA-Z0-9_]+-->/g, "")
-                .replace(/\u200B[\u200C\u200D]+\u200B/g, "");
             deindicateAll(); // Strip all indicators since no NPC is active
+            const parts = !hasEnglishRule && englishRule.length + 2 <= suffixRoom ? [englishRule] : [];
+            const used = parts.reduce((sum, part) => sum + part.length + 2, 0);
+            const world = getWorldContext(base, config, base, Math.min(600, suffixRoom - used - 2));
+            if (world) parts.push(world);
+            finishContext(parts);
             return;
         }
 
-        const decodedLabels = decodeThoughtLabels(text, activeAgents);
-        text = decodedLabels.text.replace(/<!--mf:[a-zA-Z0-9_]+-->/g, "");
+        const decodedLabels = decodeThoughtLabels(base, activeAgents);
+        if (!cacheMode) base = decodedLabels.text.replace(/<!--mf:[a-zA-Z0-9_]+-->/g, "");
 
         const primaryAgent = activeAgents[0];
         const primaryMeta = getAgentMeta(primaryAgent, config);
-        MF.scene = { agent: primaryAgent, ttl: 2 };
+        if (MF.scene.agent !== primaryAgent) MF.scene = { agent: primaryAgent, ttl: 2 };
+        MF.contextTurn.routed = true;
         MF.agent = primaryAgent; // Output hook will handle command updates for this primary agent
 
         // Apply visual indicator
@@ -2573,10 +2778,15 @@ function MindForgeCore(hook) {
         }
 
         const contextSegments = [];
-        const maxBrainChars = Math.max(320, Math.floor((config.contextPct / 100) * text.length));
+        const profileCap = config.profile === "stable" ? 600 : config.profile === "full" ? 1800 : 1000;
+        const maxBrainChars = Math.min(profileCap, Math.max(320, Math.floor((config.contextPct / 100) * base.length)));
         const budgets = allocateBudgets(maxBrainChars, activeAgents.length);
-        const isRetry = MF.hash === getHistoryHash();
+        const isRetry = MF.hash === turnHash;
         let primarySteward = null;
+        let hasStoredMemory = false;
+        let hasStoredCore = false;
+        const region = storyRegion(base);
+        const sceneText = region.length ? base.slice(Math.max(region.start, region.end - 2400), region.end) : base.slice(-2400);
 
         for (let idx = 0; idx < activeAgents.length; idx++) {
             const agentName = activeAgents[idx];
@@ -2589,13 +2799,16 @@ function MindForgeCore(hook) {
             let brain = deserializeBrain(brainCard.description);
 
             // Apply turn-based decay on active/present NPC
-            const { brain: decayedBrain, modified } = decayVolatileMemories(brain, isRetry, config.decay);
+            const { brain: decayedBrain, modified } = decayVolatileMemories(brain, isRetry || MF.contextTurn.decayed[agentName], config.decay);
+            MF.contextTurn.decayed[agentName] = true;
             if (modified) {
                 brain = decayedBrain;
                 brainCard.description = serializeBrain(brain, agentName);
             }
 
             if (isPrimary) {
+                hasStoredMemory = Object.keys(brain).length > 0;
+                hasStoredCore = Object.keys(brain).some(isCoreKey);
                 primarySteward = chooseBrainTask(agentName, brain, config, pressure);
                 const stats = getBrainStats(brain);
                 const sparseBrain = stats.keys.length > 0 && stats.keys.length < Math.min(4, config.maxBrainKeys || 14);
@@ -2610,18 +2823,19 @@ function MindForgeCore(hook) {
             }
 
             // Rank durable, relevant, and recently-used thoughts before rotating filler.
-            const recentTags = [...scanMemoryTags(text, 5), ...decodedLabels.keys];
+            const recentTags = [...scanMemoryTags(base, 5), ...decodedLabels.keys];
             let brainStr = "";
-            const rotationSeed = hashText(`${getHistoryHash()}:${agentName}:${Object.keys(brain).join("|")}`);
-            const allThoughts = rankThoughtsForContext(agentName, brain, text, recentTags, rotationSeed, config.rotation);
+            const selected = [];
+            const rotationSeed = hashText(`${turnHash}:${agentName}:${Object.keys(brain).join("|")}`);
+            const allThoughts = rankThoughtsForContext(agentName, brain, sceneText, recentTags, rotationSeed, config.rotation);
             for (const tObj of allThoughts) {
                 const displayKey = cleanKeyForLLM(tObj.key);
                 const label = (MF.labels[agentName] || {})[tObj.key];
                 const labelSuffix = Number.isInteger(label) ? ` [${label}]` : "";
-                const line = `- ${displayKey}: ${tObj.val}${labelSuffix}\n`;
-                if (brainStr.length + line.length > budget) break;
+                const line = `- ${displayKey}: ${stripThoughtIndex(tObj.val)}${labelSuffix}\n`;
+                if (brainStr.length + line.length > budget) continue;
                 brainStr += line;
-                touchMemory(agentName, tObj.key, "seen");
+                selected.push({ key: tObj.key, value: stripThoughtIndex(tObj.val), line: line.trimEnd() });
             }
 
             if (brainStr) {
@@ -2629,23 +2843,17 @@ function MindForgeCore(hook) {
                 const ownershipName = agentName.toLowerCase().endsWith("s") ? `${agentName}'` : `${agentName}'s`;
                 contextSegments.push({
                     primary: isPrimary,
+                    agentName, selected,
                     text: `\n# ${ownershipName} Brain Thoughts (${status}):\n${brainStr}`
                 });
             }
         }
 
-        const worldContext = getWorldContext(text, config);
-        const contextInjection = [
-            worldContext,
-            ...contextSegments.filter(segment => !segment.primary).map(segment => segment.text),
-            ...contextSegments.filter(segment => segment.primary).map(segment => segment.text)
-        ].join("");
-
         // Apply turn-based thought chance reduction on player turns
         const lastAct = getPrevAction();
         const isPlayerAction = lastAct && (lastAct.type === "do" || lastAct.type === "say" || lastAct.type === "story");
         const memoryOnlyAge = MF.memoryOnly && Number.isInteger(MF.memoryOnly.turn)
-            ? history.length - MF.memoryOnly.turn
+            ? currentTurn - MF.memoryOnly.turn
             : Infinity;
         const recentMemoryOnlyOutput = (
             MF.memoryOnly &&
@@ -2670,442 +2878,152 @@ function MindForgeCore(hook) {
             finalChance = 0;
             bumpHealth("memoryOnlyCooldowns");
         }
-        const triggerChance = (finalChance / 100) > Math.random();
-        const marker = "<|mindforge|>";
-        const contextHistoryHash = getHistoryHash();
-
-        if (!isRetry && triggerChance) {
-            MF.pendingMemory = { agent: primaryAgent, hash: contextHistoryHash, turn: history.length };
-            const povText = config.pov === 1 
-                ? `first-person POV (as ${config.player})` 
-                : config.pov === 3 
-                ? "third-person POV" 
-                : "second-person ('you') POV";
-            const refocus = (
-                config.reflectionChance > 0 &&
-                !hasDirectDialogPressure() &&
-                (config.reflectionChance / 100) > Math.random()
-            ) ? `\n- If useful, focus ${primaryAgent}'s thought on self-reflection or a future plan instead of surface observation.` : "";
-
-            const promptProfile = config.runtimeProfile === "guarded" ? "stable" : config.profile;
-            const stewardLabel = primarySteward ? primarySteward.label : "write or update one non-duplicate thought";
-            const slotGuidance = getSlotGuidance(primaryAgent, config);
-            const agenticCharter = getAgenticCharter(primaryAgent, config);
-            const compactMemoryContract = [
-                `# MindForge Thought Forge: ${primaryAgent}`,
-                `Start output immediately with exactly one hidden memory operation, then one space, then story prose in ${povText}.`,
-                `Valid forms only: [+scene_specific_key: I remember one private thought.] | [-old_key] | [=new_key: old_key]`,
-                `Do not use wrappers or labels like memory_operation, internal state, code, -=...=-, or markdown fences.`,
-                `Key rules: 1-4 snake_case words, scene-specific, chosen from ${primaryAgent}'s point of view; avoid memory_recent/recent_event/current_thought/note.`,
-                `Thought rules: one sentence, 8-32 words, first-person as ${primaryAgent}; use character names instead of pronouns when clarity matters.`,
-                `Good thoughts change future behavior: promises, betrayals, secrets, discoveries, fear, loyalty, plans, unfinished choices.`,
-                `Never write templates like "I need to remember this:" or "I need to understand where I stand with...".`,
-                `Visible story prose is mandatory. Never output only the memory operation. Never delete core_* keys.`,
-                `Priority: ${stewardLabel}`
-            ].join("\n");
-            const fullMemoryContract = [
-                compactMemoryContract,
-                agenticCharter,
-                slotGuidance,
-                `If an existing key already represents the same idea, overwrite it with sharper current truth; otherwise create a distinct key.`,
-                `Use delete or rename only when it clearly improves ${primaryAgent}'s brain.`
-            ].filter(Boolean).join("\n");
-            const rules = promptProfile === "full"
-                ? `<SYSTEM>
-${fullMemoryContract}
-</SYSTEM>
-
-`
-                : `<SYSTEM>
-${compactMemoryContract}
-</SYSTEM>
-
-`;
-            const enhancedRules = rules.replace("\n</SYSTEM>", `${refocus}\n</SYSTEM>`);
-
-            text = applyContextGuard(text.trimEnd() + marker + (contextInjection ? "\n" + contextInjection + "\n" : "") + "\n\n" + enhancedRules, config);
-        } else {
-            if (MF.pendingMemory && MF.pendingMemory.agent === primaryAgent) {
-                MF.pendingMemory = { agent: "", hash: "", turn: -999 };
+        MF.contextTurn.roll ??= Math.random();
+        const triggerChance = (finalChance / 100) > MF.contextTurn.roll;
+        let parts = [];
+        let used = 0;
+        const addPart = value => {
+            if (!value || used + value.length + 2 > suffixRoom) return false;
+            parts.push(value);
+            used += value.length + 2;
+            return true;
+        };
+        const pov = config.pov === 1 ? "first person" : config.pov === 3 ? "third person" : "second person";
+        const povRule = `Story: ${pov}; player ${config.player}.`;
+        const task = `For ${primaryAgent} only, after the story optionally append one line: [+specific_key: I ...] | [-old_key] | [=new_key: old_key]. One short grounded first-person thought; reuse keys, protect core_*. No labels/code. Omit memory before shortening the story.`;
+        let blocks = [];
+        let memoryChars = 0;
+        let hasPrimaryMemory = false;
+        let hasPrimaryCore = false;
+        const packMemory = compact => {
+            blocks = [];
+            memoryChars = 0;
+            hasPrimaryMemory = false;
+            hasPrimaryCore = false;
+            for (const segment of contextSegments) {
+                const header = compact ? `# ${segment.agentName} private:` : segment.text.trim().split("\n")[0];
+                const render = item => compact ? `- ${item.value}` : item.line;
+                const kept = [];
+                for (const item of segment.selected) {
+                    const candidate = [header, ...kept.map(render), render(item)].join("\n");
+                    if (used + 2 + candidate.length <= suffixRoom && memoryChars + 2 + candidate.length <= maxBrainChars) kept.push(item);
+                }
+                if (!kept.length) continue;
+                const block = [header, ...kept.map(render)].join("\n");
+                blocks.push({ primary: segment.primary, agentName: segment.agentName, kept, text: block });
+                used += 2 + block.length;
+                memoryChars += 2 + block.length;
+                if (segment.primary) {
+                    hasPrimaryMemory = true;
+                    hasPrimaryCore = kept.some(item => isCoreKey(item.key));
+                }
             }
-            const povText = config.pov === 1 
-                ? `first-person POV (as ${config.player})` 
-                : config.pov === 3 
-                ? "third-person POV" 
-                : "second-person ('you') POV";
-
-            const passiveRules = `<SYSTEM>\nAlways continue the story in ${povText}.\n</SYSTEM>\n\n`;
-            text = applyContextGuard(text.trimEnd() + marker + (contextInjection ? "\n" + contextInjection + "\n" : "") + "\n\n" + passiveRules, config);
+            blocks.sort((a, b) => Number(a.primary) - Number(b.primary));
+            parts.push(...blocks.map(block => block.text));
+        };
+        if (!hasEnglishRule) addPart(englishRule);
+        packMemory(false);
+        const canWrite = !isRetry && triggerChance && (hasEnglishRule || parts.includes(englishRule)) &&
+            (!hasStoredMemory || hasPrimaryMemory) && (!hasStoredCore || hasPrimaryCore);
+        const taskFits = canWrite && used + povRule.length + task.length + 4 <= suffixRoom;
+        if (taskFits) {
+            addPart(povRule);
+            addPart(task);
+        } else {
+            // Read-only turns need values, not editing keys or a maintenance charter.
+            // Keep the ownership header and every selected sentence verbatim.
+            parts = [];
+            used = 0;
+            if (!hasEnglishRule) addPart(englishRule);
+            packMemory(true);
+            addPart(povRule);
         }
+        for (const block of blocks) {
+            for (const item of block.kept) {
+                const id = `${block.agentName}:${item.key}`;
+                if (!MF.contextTurn.seen[id]) {
+                    touchMemory(block.agentName, item.key, "seen");
+                    MF.contextTurn.seen[id] = true;
+                }
+            }
+        }
+        if (taskFits) {
+            MF.pendingMemory = { agent: primaryAgent, hash: turnHash, turn: currentTurn };
+            if (config.profile !== "stable") {
+                addPart(getSlotGuidance(primaryAgent, config));
+                if (config.steward && primarySteward) {
+                    addPart(`Priority: ${primarySteward.kind === "bootstrap" ? primarySteward.label : primarySteward.kind}.`);
+                }
+            }
+            const reflect = config.reflectionChance > 0 && !hasDirectDialogPressure() &&
+                hashText(`${turnHash}:reflection`) % 100 < config.reflectionChance;
+            if (reflect) addPart("Consider an unresolved motive or future plan.");
+        }
+        if (taskFits) addPart(getAgenticCharter(primaryAgent, config));
+        addPart(getWorldContext(sceneText, config, base, Math.min(600, suffixRoom - used - 2)));
+        MF.delivery = { hash: turnHash, agent: primaryAgent, task: Boolean(taskFits), consumed: false };
+        finishContext(parts, Boolean(taskFits), memoryChars, !taskFits);
 
         return;
     }
 
-    // 3. OUTPUT HOOK: Parse memories, overwrite keys, clean system tags
+    // 3. OUTPUT HOOK: Clean once, then apply at most one authorized memory change.
     if (hook === "output") {
         const agentName = MF.agent;
-        MF.agent = ""; // Reset for next turn
-
-        if (!text || text.trim() === "") {
-            bumpHealth("emptyOutputs");
-            text = "\u200B";
-            return;
-        }
-
-        // Always strip system instructions/rules blocks first
-        text = text.replace(/<SYSTEM>[\s\S]*?<\/SYSTEM>/g, "").trim();
-        if (text === "") {
-            bumpHealth("emptyOutputs");
-            text = "\u200B";
-            return;
-        }
-
-        const uiCleaned = stripUiChromeLeaks(text);
-        if (uiCleaned.removed) {
-            text = uiCleaned.text;
-            MF.health.uiLeakSkips = (MF.health.uiLeakSkips || 0) + uiCleaned.removed;
-            if (text === "") {
-                bumpHealth("emptyOutputs");
-                text = "\u200B";
-                return;
-            }
-        }
-
-        const debugCleaned = stripCodeDebugLeaks(text);
-        if (debugCleaned.removed) {
-            text = debugCleaned.text;
-            MF.health.codeLeakSkips = (MF.health.codeLeakSkips || 0) + debugCleaned.removed;
-            if (text === "") {
-                bumpHealth("emptyOutputs");
-                text = "\u200B";
-                return;
-            }
-        }
-
-        if (!agentName) {
-            const noAgentMemoryClean = text.replace(/[-=]{1,}\s*memory[ _-]?operation\s*[:=]\s*[\s\S]{1,260}?\s*=[-=]{1,}/gi, "").trim();
-            if (noAgentMemoryClean !== text.trim()) {
-                bumpHealth("memoryOperationLeakSkips");
-                text = noAgentMemoryClean || "\u200B";
-            }
-            return;
-        }
-
-        // --- ENHANCED COMMAND HEALING ---
-
-        // 1. Repair missing brackets if output starts with prefix command
-        if (text.trim().startsWith("+") || text.trim().startsWith("-") || text.trim().startsWith("=")) {
-            const prefixRegex = /^([-+=])\s*([a-zA-Z0-9_\s()]+)(?:\s*:\s*([^.!?\n]+[.!?]?))/;
-            const match = text.trim().match(prefixRegex);
-            if (match) {
-                const sign = match[1];
-                const key = formatMemoryKey(match[2].trim().replace(/\s+/g, "_"));
-                const val = match[3] ? match[3].trim() : "";
-                const command = val ? `[${sign}${key}: ${val}]` : `[${sign}${key}]`;
-                text = command + " " + text.trim().replace(prefixRegex, "").trim();
-            }
-        }
-
-        // 2. Auto-close unclosed opening brackets
-        if (text.includes("[") && !text.includes("]")) {
-            const openIdx = text.indexOf("[");
-            const sub = text.slice(openIdx);
-            const colonIdx = sub.indexOf(":");
-            if (colonIdx !== -1) {
-                let endIdx = -1;
-                const sentenceEndRegex = /[.!?]/g;
-                let m;
-                while ((m = sentenceEndRegex.exec(sub)) !== null) {
-                    if (m.index > colonIdx) {
-                        endIdx = m.index;
-                        break;
-                    }
-                }
-                if (endIdx !== -1) {
-                    text = text.slice(0, openIdx + endIdx + 1) + "]" + text.slice(openIdx + endIdx + 1);
-                } else {
-                    if (sub.length > 80) {
-                        text = text.slice(0, openIdx + 80) + "]" + text.slice(openIdx + 80);
-                    } else {
-                        text = text.trimEnd() + "]";
-                    }
-                }
-            } else {
-                const spaceIdx = sub.indexOf(" ");
-                if (spaceIdx !== -1) {
-                    text = text.slice(0, openIdx + spaceIdx) + "]" + text.slice(openIdx + spaceIdx);
-                } else {
-                    text = text.trimEnd() + "]";
-                }
-            }
-        }
-
-        // 3. Auto-close unclosed opening parentheses
-        if (text.includes("(") && !text.includes(")")) {
-            const openIdx = text.indexOf("(");
-            const sub = text.slice(openIdx);
-            const eqIdx = sub.indexOf("=");
-            const colonIdx = sub.indexOf(":");
-            const delimiterIdx = eqIdx !== -1 ? eqIdx : colonIdx;
-            if (delimiterIdx !== -1) {
-                let endIdx = -1;
-                const sentenceEndRegex = /[.!?]/g;
-                let m;
-                while ((m = sentenceEndRegex.exec(sub)) !== null) {
-                    if (m.index > delimiterIdx) {
-                        endIdx = m.index;
-                        break;
-                    }
-                }
-                if (endIdx !== -1) {
-                    text = text.slice(0, openIdx + endIdx + 1) + ")" + text.slice(openIdx + endIdx + 1);
-                } else {
-                    if (sub.length > 80) {
-                        text = text.slice(0, openIdx + 80) + ")" + text.slice(openIdx + 80);
-                    } else {
-                        text = text.trimEnd() + ")";
-                    }
-                }
-            } else {
-                const spaceIdx = sub.indexOf(" ");
-                if (spaceIdx !== -1) {
-                    text = text.slice(0, openIdx + spaceIdx) + ")" + text.slice(openIdx + spaceIdx);
-                } else {
-                    text = text.trimEnd() + ")";
-                }
-            }
-        }
-
-        // 4. Auto-close unclosed opening curly braces
-        if (text.includes("{") && !text.includes("}")) {
-            const openIdx = text.indexOf("{");
-            const sub = text.slice(openIdx);
-            const eqIdx = sub.indexOf("=");
-            const colonIdx = sub.indexOf(":");
-            const delimiterIdx = eqIdx !== -1 ? eqIdx : colonIdx;
-            if (delimiterIdx !== -1) {
-                let endIdx = -1;
-                const sentenceEndRegex = /[.!?]/g;
-                let m;
-                while ((m = sentenceEndRegex.exec(sub)) !== null) {
-                    if (m.index > delimiterIdx) {
-                        endIdx = m.index;
-                        break;
-                    }
-                }
-                if (endIdx !== -1) {
-                    text = text.slice(0, openIdx + endIdx + 1) + "}" + text.slice(openIdx + endIdx + 1);
-                } else {
-                    if (sub.length > 80) {
-                        text = text.slice(0, openIdx + 80) + "}" + text.slice(openIdx + 80);
-                    } else {
-                        text = text.trimEnd() + "}";
-                    }
-                }
-            } else {
-                const spaceIdx = sub.indexOf(" ");
-                if (spaceIdx !== -1) {
-                    text = text.slice(0, openIdx + spaceIdx) + "}" + text.slice(openIdx + spaceIdx);
-                } else {
-                    text = text.trimEnd() + "}";
-                }
-            }
-        }
-
-        // Normalize all opening/closing mismatched or matched command-like enclosures to standard brackets [ ... ]
-        text = text.replace(/([(\[{])\s*([\s\S]+?)\s*([)\]}])/g, (m, open, content, close) => {
-            const trimmedContent = content.trim();
-            const startsWithSign = /^[-+=]/.test(trimmedContent);
-            const startsWithWord = /^(?:del(?:et(?:e[ds]?|ing))?|for(?:get(?:s|ting)?|got(?:ten)?)|remov(?:e[ds]?|ing))\s/i.test(trimmedContent);
-            const isAssignment = /^[a-zA-Z0-9_\s()]+?\s*[=:]\s*/.test(trimmedContent);
-
-            if (startsWithSign || startsWithWord || isAssignment) {
-                return `[${trimmedContent}]`;
-            }
-            return m; // return unchanged
-        });
-
-        // Fetch brain early to facilitate translation logic
-        const brainCard = getBrainCard(agentName);
-        const brain = deserializeBrain(brainCard.description);
-        text = normalizeOperationSyntax(text, brain);
-
-        // Translate bracket delete commands (e.g. [delete key])
-        const bracketDelRegex = /\[\s*(?:del(?:et(?:e[ds]?|ing))?|for(?:get(?:s|ting)?|got(?:ten)?)|remov(?:e[ds]?|ing))\s+([a-zA-Z0-9_\s()]+)\s*\]/ig;
-        text = text.replace(bracketDelRegex, "[-$1]");
-
-        // Translate bracket set/rename commands (e.g. [key = val])
-        const bracketAssignRegex = /\[\s*([a-zA-Z0-9_\s()]+?)\s*([=:])\s*([^\]]+)\s*\]/g;
-        text = text.replace(bracketAssignRegex, (match, keyRaw, delimiter, valRaw) => {
-            const key = formatMemoryKey(keyRaw.trim().replace(/\s+/g, "_"));
-            const val = cleanOperationValueLiteral(valRaw);
-            const cleanVal = val.replace(/\(\d+\)$/, "").toLowerCase();
-            let isRename = false;
-            if (!val.includes(" ")) {
-                for (const k in brain) {
-                    if (k.replace(/^\_/, "").replace(/\(\d+\)$/, "").toLowerCase() === cleanVal) {
-                        isRename = true;
-                        break;
-                    }
-                }
-            }
-            if (isRename) {
-                return `[=${key}: ${val}]`;
-            } else {
-                return `[+${key}: ${val}]`;
-            }
-        });
-
-        // Parse bracket operation
-        const opRegex = /\[\s*([+-=])\s*([a-zA-Z0-9_\s()]+)(?:\s*:\s*([^\]]+))?\s*\]/;
-        const match = text.match(opRegex);
-
-        let pendingOp = null;
+        const request = MF.pendingMemory;
+        const delivery = MF.delivery;
         const currentHash = getHistoryHash();
         const isRetry = MF.hash === currentHash;
-
-        if (match) {
-            const sign = match[1];
-            const keyRaw = formatMemoryKey(match[2].trim().replace(/\s+/g, "_"));
-            const valRaw = match[3] ? match[3].trim() : "";
-            // Clean value: strip surrounding quotes and simplify formatting
-            let val = cleanOperationValueLiteral(valRaw);
-            val = val.replace(/[*#~]+/g, "").replace(/\s+/g, " ").replaceAll("…", "...");
-
-            if (isRetry) {
-                bumpHealth("retrySkips");
-            } else {
-                if (sign === "+" && keyRaw && val) {
-                    let key = keyRaw;
-                    if (keyRaw.startsWith("_") && !keyRaw.includes("(")) {
-                        key = `${keyRaw}(${config.decay || 3})`; // config decay count
-                    }
-                    pendingOp = { type: "set", key, val, tagKey: cleanKeyForLLM(key), hash: currentHash };
-                } else if (sign === "-" && keyRaw) {
-                    pendingOp = { type: "delete", key: keyRaw, hash: currentHash };
-                } else if (sign === "=" && keyRaw && val) {
-                    const oldKeyRaw = formatMemoryKey(val.replace(/\s+/g, "_"));
-                    let actualOldKey = null;
-                    let foundVal = null;
-                    const cleanOld = oldKeyRaw.replace(/^\_/, "").replace(/\(\d+\)$/, "").toLowerCase();
-                    for (const k in brain) {
-                        const currentClean = k.replace(/^\_/, "").replace(/\(\d+\)$/, "").toLowerCase();
-                        if (currentClean === cleanOld) {
-                            if (isCoreKey(k)) break;
-                            foundVal = brain[k];
-                            actualOldKey = k;
-                            break;
-                        }
-                    }
-
-                    if (actualOldKey) {
-                        let key = keyRaw;
-                        if (keyRaw.startsWith("_") && !keyRaw.includes("(")) {
-                            key = `${keyRaw}(${config.decay || 3})`; // config decay count
-                        }
-                        pendingOp = { type: "rename", key, oldKey: actualOldKey, val: foundVal, hash: currentHash };
-                    }
-                }
-            }
-
-            text = text.replace(opRegex, "").trim();
+        MF.agent = "";
+        const parsed = parsedOutput || MindForgeParseOutput(text);
+        text = parsed.text;
+        if (parsed.removed) bumpHealth("memoryOperationLeakSkips");
+        if (parsed.truncated) bumpHealth("truncatedOperations");
+        if (parsed.scaffolding) bumpHealth("scaffoldingSkips");
+        if (parsed.ui) MF.health.uiLeakSkips = (MF.health.uiLeakSkips || 0) + parsed.ui;
+        if (parsed.code) MF.health.codeLeakSkips = (MF.health.codeLeakSkips || 0) + parsed.code;
+        if (parsed.operations.length > 1) bumpHealth("parserMultiOps");
+        if (parsed.operations.some(op => op.repaired)) bumpHealth("parserLooseOps");
+        // World lore is independent of an NPC receiving a write task this turn.
+        if (config.autoLore && MF.worldHash !== currentHash && isUsableNarrative(text)) {
+            updateWorldMemory(text, config, "output");
+            MF.worldHash = currentHash;
+        }
+        const authorized = agentName && !isRetry && delivery && (
+            delivery.task && delivery.hash === currentHash && delivery.agent === agentName && !delivery.consumed
+        );
+        if (delivery) delivery.consumed = true;
+        if (!authorized) {
+            if (parsed.operations.length) bumpHealth(isRetry ? "retrySkips" : "undeliveredSkips");
+            if (!text) { bumpHealth("emptyOutputs"); text = "\u200B"; }
+            return;
         }
 
-        // --- OUTPUT SANITIZATION ---
-        const memoryLeakCleanup = stripMemoryOperationLeaks(text);
-        if (memoryLeakCleanup.removed) {
-            bumpHealth("memoryOperationLeakSkips");
-            text = memoryLeakCleanup.text;
+        const brainCard = getBrainCard(agentName);
+        const brain = deserializeBrain(brainCard.description);
+        const candidate = parsed.operations[0];
+        let pendingOp = null;
+        if (candidate) {
+            let key = formatMemoryKey(candidate.key);
+            const val = cleanOperationValueLiteral(candidate.val);
+            const oldKey = Object.keys(brain).find(k => cleanComparableKey(k) === cleanComparableKey(formatMemoryKey(val)));
+            const type = candidate.type === "assign" ? (oldKey && !/\s/.test(val) ? "rename" : "set") : candidate.type;
+            if (type !== "delete" && key.startsWith("_") && !key.includes("(")) key += `(${config.decay})`;
+            if (key && type === "set" && val) pendingOp = { type, key, val, tagKey: cleanKeyForLLM(key), hash: currentHash };
+            else if (key && type === "delete") pendingOp = { type, key, hash: currentHash };
+            else if (key && type === "rename" && oldKey) pendingOp = { type, key, oldKey, val: brain[oldKey], hash: currentHash };
         }
-        const lines = text.split("\n");
-        const cleanedLines = [];
-        const playerNameLower = (config.player || "protagonist").toLowerCase();
-        const activeAgentLower = agentName ? agentName.toLowerCase() : "";
-        let removedUnsafeLine = false;
-
-        for (let line of lines) {
-            const lower = line.toLowerCase();
-            // Check if line contains leaked instructions or system prompt leftovers
-            let isNpcLeak = false;
-            if (activeAgentLower && lower.includes(`you are ${activeAgentLower}`)) {
-                isNpcLeak = true;
-            }
-            if (config.agents) {
-                for (const agent of config.agents) {
-                    if (lower.includes(`you are ${agent.name.toLowerCase()}`)) {
-                        isNpcLeak = true;
-                        break;
-                    }
-                    if (agent.aliases) {
-                        for (const alias of agent.aliases) {
-                            if (lower.includes(`you are ${alias}`)) {
-                                isNpcLeak = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (isNpcLeak) break;
-                }
-            }
-
-            const uiLeakLine = isUiChromeLeakLine(line);
-            const codeDebugLeakLine = isCodeDebugLeakLine(line);
-            const memoryOpLeakLine = isMemoryOperationLeakLine(line);
-            const shouldDropLine = (
-                uiLeakLine ||
-                codeDebugLeakLine ||
-                memoryOpLeakLine ||
-                lower.includes("strict output") ||
-                lower.includes("output format") ||
-                lower.includes("bracket operation") ||
-                lower.includes("thought of") ||
-                lower.includes("to forget") ||
-                lower.includes("to rename") ||
-                lower.includes("story continues") ||
-                lower.includes("configure mindforge") ||
-                lower.includes("mindforge npc") ||
-                lower.includes(`you are ${playerNameLower}`) ||
-                isNpcLeak ||
-                lower.includes("system instruction") ||
-                /^(as an ai|as a language model|sorry\b|i am unable|i'm unable)\b/i.test(line.trim()) ||
-                /\b(?:cannot|can't)\s+comply\b/i.test(line.trim()) ||
-                // Leftover unparsed operations that might have leaked
-                /^\[\s*[-+=].*\]$/.test(line.trim()) ||
-                /^\(\s*[-+=].*\)$/.test(line.trim()) ||
-                /^\(\s*(?:del(?:et(?:e[ds]?|ing))?|for(?:get(?:s|ting)?|got(?:ten)?)|remov(?:e[ds]?|ing)).*\)$/i.test(line.trim()) ||
-                /^\(\s*[a-zA-Z0-9_\s()]+?\s*[=:]\s*.*\)$/.test(line.trim()) ||
-                /^\{\s*[-+=].*\}$/.test(line.trim()) ||
-                /^\{\s*(?:del(?:et(?:e[ds]?|ing))?|for(?:get(?:s|ting)?|got(?:ten)?)|remov(?:e[ds]?|ing)).*\}$/i.test(line.trim()) ||
-                /^\{\s*[a-zA-Z0-9_\s()]+?\s*[=:]\s*.*\}$/.test(line.trim())
-            );
-            if (shouldDropLine) {
-                removedUnsafeLine = true;
-                if (uiLeakLine) {
-                    bumpHealth("uiLeakSkips");
-                }
-                if (codeDebugLeakLine) {
-                    bumpHealth("codeLeakSkips");
-                }
-                if (memoryOpLeakLine) {
-                    bumpHealth("memoryOperationLeakSkips");
-                }
-                continue;
-            }
-            cleanedLines.push(line);
-        }
-        text = cleanedLines.join("\n").trim();
-
         let prefixText = "";
         const hasNarrative = isUsableNarrative(text);
-        if (!pendingOp && hasNarrative && !isRetry && MF.pendingMemory && MF.pendingMemory.agent === agentName && MF.pendingMemory.hash === currentHash) {
+        if (!pendingOp && !parsed.removed && !parsed.scaffolding && hasNarrative && request && request.agent === agentName && request.hash === currentHash) {
             pendingOp = buildFallbackMemoryOp(agentName, text, config);
             if (pendingOp) {
                 pendingOp.hash = currentHash;
             }
         }
-        const memoryOnlyOutput = !!(pendingOp && !hasNarrative && text === "" && !removedUnsafeLine);
+        const memoryOnlyOutput = !!(pendingOp && !hasNarrative && text === "" && !parsed.scaffolding && !parsed.truncated);
         if (pendingOp && !hasNarrative && text === "") {
-            MF.memoryOnly = { agent: agentName, turn: history.length };
+            MF.memoryOnly = { agent: agentName, turn: currentTurn };
             bumpHealth("memoryOnlyOutputs");
         }
 
@@ -3123,7 +3041,7 @@ ${compactMemoryContract}
                     bumpHealth("thoughtQualitySkips");
                     bumpHealth("qualitySkips");
                     commitSet = false;
-                } else if (isDuplicateThought(brain, setOp.key, setOp.val)) {
+                } else if (isDuplicateThought(brain, setOp.key, setOp.val, agentName)) {
                     bumpHealth("duplicateSkips");
                     commitSet = false;
                 }
@@ -3161,7 +3079,9 @@ ${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(storedThought)};`;
                     }
                 }
             } else if (pendingOp.type === "rename") {
-                if (isCoreKey(pendingOp.oldKey) || isCoreKey(pendingOp.key)) {
+                if (pendingOp.oldKey === pendingOp.key) {
+                    MF.ops--;
+                } else if (isCoreKey(pendingOp.oldKey) || isCoreKey(pendingOp.key)) {
                     bumpHealth("coreSkips");
                     MF.ops--;
                 } else {
@@ -3181,7 +3101,7 @@ ${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(storedThought)};`;
 
             if (logMsg) {
                 MF.hash = pendingOp.hash;
-                MF.lastWrite[agentName] = history.length;
+                MF.lastWrite[agentName] = currentTurn;
                 if (MF.pendingMemory && MF.pendingMemory.agent === agentName) {
                     MF.pendingMemory = { agent: "", hash: "", turn: -999 };
                 }
@@ -3194,10 +3114,6 @@ ${agentName.toLowerCase()}.${setOp.key} = ${JSON.stringify(storedThought)};`;
         } else if (pendingOp) {
             bumpHealth("skippedCommits");
             bumpHealth("qualitySkips");
-        }
-
-        if (hasNarrative) {
-            updateWorldMemory(text, config, "output");
         }
 
         if (text === "" && memoryOnlyOutput) {

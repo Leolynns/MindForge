@@ -4,157 +4,217 @@
 
 # MindForge
 
-**A lightweight private-mind NPC memory engine for AI Dungeon.**
+**Persistent NPC minds. Lighter context. Story-first memory.**
 
 **by Leolynn**
 
-MindForge gives recurring NPCs persistent private thoughts, goals,
-relationships, secrets, plans, and short-term emotional states without asking
-players to manage commands during normal play. It runs through AI Dungeon's
-Input, Context, Output, and Library script tabs, stores NPC brains in story
-cards, and quietly maintains those brains in the background.
+MindForge is a lightweight NPC memory engine for **AI Dungeon**. Characters keep
+private thoughts, motives, promises, relationships, secrets, and plans in their
+own Brain Story Cards. Relevant memories guide the next scene while the player
+continues playing normally.
 
-MindForge was inspired by Inner Self by LewdLeah. Thank you to Inner Self for
-the inspiration.
+[Install](#installation) · [What's new](#whats-new) · [NPC setup](#npc-setup) ·
+[Comparison](#comparison-with-inner-self) · [Settings](#settings)
 
-## What MindForge Does
+## What's new
 
-MindForge watches the recent story, detects configured NPCs, injects only the
-most relevant memories for the active scene, and asks the model for one hidden
-memory operation when useful. The visible response stays normal story prose.
+- **Off by default:** prepares the configuration and main NPC name, then waits
+  for the player to set `Enabled: true` before starting NPC memory.
+- **Smaller active prompts:** the matched three-memory test uses 768 added
+  characters, versus approximately 2,320 in original Inner Self / KV Inner Self.
+- **Compact passive turns:** 247 characters for the same three memories. Read-only
+  turns keep complete thoughts and their owner while omitting editing syntax.
+- **Story first:** the model can append one private memory operation after its
+  story response. Memory maintenance does not require a separate generation turn.
+- **Improved output cleanup:** one shared parser handles active, passive, and
+  no-NPC turns, including recognized prompt leaks and unfinished operations.
+- **One automatic main NPC:** opening focus, relationship cues, and explicit
+  scenario metadata help select one main character. Add supporting NPCs manually.
+- **Independent supporting minds:** manually registered characters can become
+  active and update their own memories when their names or aliases appear.
+- **Cache-friendly transport:** preserves the incoming prefix when the host
+  signals cache-efficient mode and appends only what fits.
+- **Stronger memory safeguards:** turn-bound writes, retry protection, conservative
+  duplicate detection, core-memory protection, and recoverable adaptive profiles.
+- **Optional World Memory and World Cards:** retain complete public observations
+  and create name-triggered cards for recurring entities without extra AI calls.
 
-The goal is simple:
+See [CHANGELOG.md](CHANGELOG.md) for the update notes.
 
-- NPCs remember what matters.
-- Their private motives affect subtext and decisions.
-- Memory stays compact enough for public scenarios.
-- Players do not need to learn commands.
-- Creators can configure everything from a story card.
+## Installation
 
-## Highlights
+1. Open your scenario's **Details → Scripting → Edit Scripts**.
+2. Copy the **entire contents** of each file into its matching tab:
 
-- **Private Mind charter:** frames each active NPC as a continuous agent with
-  motives, loyalties, fears, secrets, and unfinished plans.
-- **Scenario Auto-Discovery:** registers clear main NPCs from resolved opening
-  text or Plot Essentials without trusting ambiguous custom headings.
-- **Brain Steward:** chooses whether this turn should write, update, rename,
-  delete, or skip a memory operation.
-- **Auto Doctor:** silently repairs damaged brain cards, deduplicates repeated
-  memories, and folds weak memories into background notes.
-- **Memory slots:** encourages durable keys such as `relationship_player`,
-  `goal_current`, `plan_next`, `secret_hidden`, `state_current`, and
-  `memory_recent`.
-- **Core memory protection:** `core_*` keys are protected from automatic
-  deletion and background compaction.
-- **Volatile memories:** `_mood(3)` style temporary memories decay over turns.
-- **Multi-NPC scenes:** one primary Active NPC and additional Present NPCs can
-  share the context budget.
-- **Scene lock:** avoids rapid primary-character switching while a scene is
-  still focused.
-- **Context guard:** trims safely around AI Dungeon `info.maxChars` limits.
-- **Output quality gate:** skips memory writes from prompt leaks, refusals,
-  placeholders, empty outputs, or player-control style memories.
-- **Parser repair:** recovers common model mistakes such as unclosed brackets,
-  parenthesis commands, brace commands, loose assignments, and multiple memory
-  operations in one response.
-- **Optional World Memory:** disabled by default; when enabled, it records
-  recurring named places, objects, and concepts into a lightweight world card.
-- **Self-documenting config:** the generated config story card doubles as a
-  compact creator control panel.
-- **Regression tested:** ships with a local test harness covering core runtime
-  behavior.
+   | AI Dungeon tab | File |
+   |---|---|
+   | Library | [src/library.js](src/library.js) |
+   | Input | [src/input.js](src/input.js) |
+   | Context | [src/context.js](src/context.js) |
+   | Output | [src/output.js](src/output.js) |
 
-## Quick Install
+3. Save all four tabs and start or continue the adventure.
+4. Open the generated **Configure MindForge** Story Card. MindForge starts with
+   **`Enabled: false`**. It can prepare the main NPC name while disabled.
+5. When you want to use NPC memory, change that line to **`Enabled: true`**.
 
-Copy these files into the matching AI Dungeon script tabs:
+While disabled, MindForge does not inject memories or tasks, write or decay
+brains, or process ordinary story output. Players can leave it off and play
+normally. If it is switched off after a memory task was already sent, that
+pending operation is cleaned once without saving a new memory.
 
-```text
-src/input.js   -> Input
-src/context.js -> Context
-src/output.js  -> Output
-src/library.js -> Library
-```
+Use GitHub's **Raw** button when copying a file. All four tabs should come from
+the same version. No package installation, API key, or external service is
+required to run MindForge.
 
-You can also copy from `dist/`, which is generated by:
+### Language
 
-```bash
-npm run build
-```
-
-Start or continue the scenario once. MindForge will create a story card named
-`Configure MindForge`.
-
-## Public Scenario Setup
-
-For most public scenarios:
-
-1. Install the four script files.
-2. Start the scenario once so the config card is created.
-3. Add important recurring NPC names to the config card notes. MindForge can
-   also discover clear main NPCs automatically from resolved opening text.
-4. Leave `Player Name` on `auto` if your scenario reveals the setup answer in
-   text such as `Your name is ${Your name?}`; set it manually if needed.
-5. Keep `Model Profile` on `Balanced`.
-6. Leave `Brain Steward`, `Agentic Charter`, `Auto Doctor`,
-   `Bootstrap Empty Brains`, `Memory Slots`, and `Thought Quality Gate`
-   enabled.
-7. Leave `World Memory` disabled unless you want shared world lore to grow
-   automatically.
-
-That is enough for normal play. Players can ignore commands.
-
-## Registering NPCs
-
-MindForge registers side characters from the **notes/description** area of the
-`Configure MindForge` story card, not from the entry settings. Put one NPC per
-line under the guide text:
+MindForge's prompts, controls, and requested narration use **English**. Add this
+line to your scenario's AI Instructions, especially for full cache contexts:
 
 ```text
-Clara, princess, her highness
-Marcus, captain
-Nora, archivist
+Write all narration, dialogue and thoughts in English.
 ```
 
-The first name is the NPC brain name. The remaining comma-separated values are
-aliases. When any name or alias appears in recent story text, MindForge creates
-or finds that NPC's brain card and injects the relevant memories.
+MindForge requests English; it is not a translator or a language classifier.
 
-Example config notes:
+## NPC setup
+
+### Automatic: one main NPC
+
+With **Scenario Auto-Discovery: true**, MindForge can fill one main-NPC slot
+when the configured cast is empty. It considers the opening and Plot Essentials
+together. Explicit main-NPC metadata takes priority; clear relationship cues
+and a strongly focused opening can also identify the main character.
+
+Character cards contribute candidate names and aliases. They do **not** cause
+every character in the scenario to be registered. Translation copies and known
+location/organization cards are not treated as NPC registrations.
+
+Discovery can prepare the name in the config notes while `Enabled: false`;
+the brain is created when the engine is enabled and the character becomes active.
+The chosen main character is saved once. Later scenes do not automatically grow
+the cast or replace that character. If the evidence is ambiguous, register the
+main NPC yourself. An explicit hint can use this format:
 
 ```text
-NPC Names (first name followed by optional comma-separated aliases):
-// MindForge Quick Guide:
-Clara, princess, her highness
-Marcus, captain, Sir Marcus
-Nora, archivist
+{ Main NPC:
+Name: Clara
+}
 ```
 
-You can also register NPCs with normal story cards:
+### Manual: add supporting NPCs
 
-- Title a card `@Clara`; MindForge will clean the title to `Clara`.
-- Or put `mindforge:npc` / `mf:npc` in the card keys and use the NPC name as
-  the title.
-
-MindForge creates the matching brain card automatically.
-
-## Configuration Card
-
-MindForge creates this card on first run:
+In **Configure MindForge → Notes/Description**, put one character per line.
+Write a simple first name first, followed by optional comma-separated aliases:
 
 ```text
-MindForge Configuration
+NPC Names:
+Clara, Clara Ashford
+Marcus, Captain Marcus
+Nora, the archivist
+```
 
-Enabled: true
+If Clara was discovered automatically, adding Marcus and Nora below her makes
+them eligible for their own memories once `Enabled: true`. Manual registration
+works even with Auto-Discovery off.
+The first name identifies the brain; the other entries are trigger aliases.
+Guide lines starting with `//` are ignored.
+
+Each registered NPC can become the active character and write to its own brain.
+The main NPC does not permanently occupy the active slot. Recent name mentions,
+a short scene lock, profile limits, and available context determine which minds
+are included. Registering seven NPCs does not inject seven brains every turn.
+
+You can also explicitly mark a normal card by naming it `@Clara`, or by adding
+`mindforge:npc` / `mf:npc` to its keys and using `Clara` as its title. Use a
+**simple first name** for these markers; use the config list for full-name aliases.
+
+### Player name
+
+`Player Name: auto` looks for resolved setup text such as `Your name is Alex`.
+If no name is detected, it uses `protagonist`. A manually entered name takes
+priority. Set it explicitly if your setup does not reveal the answer in text;
+the current detector does not read answers directly from `state.placeholders`.
+
+## How memory works
+
+1. Find relevant registered NPCs in recent story actions.
+2. Select complete memories within the context budget.
+3. When useful and affordable, request one private memory operation after the
+   story, then remove that operation from the displayed response.
+4. Apply at most one authorized operation for that NPC and turn.
+
+For example, the model might produce:
+
+```text
+Clara closes the gate and waits for Alex.
+[+gate_promise: I promised Alex to guard the gate until sunrise.]
+```
+
+The player sees the story; the completed operation updates Clara's brain.
+Incomplete trailing operations are removed without storing unfinished memories.
+Older prefix-style operations and several common formatting mistakes are also
+recognized.
+
+When the format is ignored, a conservative fallback can record an explicit,
+unambiguous NPC promise or plan. It does not invent motives from a gesture or
+unattributed dialogue. A model response containing only a valid memory operation
+can store it once, display `...`, and briefly cool down further memory prompts.
+
+### Brain cards
+
+You can inspect or edit a brain's Notes/Description:
+
+```text
+core_identity: I protect the archive above everything else.
+relationship_alex: I trust Alex with the sealed map.
+goal_current: I want to find the hidden door.
+plan_next: I will search the western shelf.
+secret_hidden: I know the captain lied.
+_state_current(3): I am trying not to show fear.
+```
+
+- `core_*` keys are protected from automatic deletion, renaming, and compaction.
+  An explicit set operation can still update them.
+- `_key(n)` memories expire through active/present turns; repeated Context calls
+  within the same turn do not apply decay twice.
+- Reusing a key updates that thought. Duplicate checks preserve changed
+  negation, quantities, and actors rather than relying on word overlap alone.
+- Auto Doctor repairs recognizable damaged cards and compacts lower-value
+  memories into `background` when needed.
+- Model-authored writes include an operation index in storage. That index is
+  omitted from the memory text sent to the model.
+
+## Settings
+
+**Balanced** is the recommended starting point for standard and cache models.
+
+| Profile | Best suited to | Maximum NPC-memory block budget |
+|---|---|---:|
+| Stable | Smaller or fragile models; one active NPC | 600 characters |
+| Balanced | Most adventures; multiple registered NPCs | 1,000 characters |
+| Full | Larger windows and more memory context | 1,800 characters |
+
+The percentage setting and available space can reduce these caps. Task
+instructions and optional world lore also count toward the overall context
+limit. Stored memories are not deleted just because they do not fit this turn.
+
+<details>
+<summary>Default configuration</summary>
+
+```text
+Enabled: false
 Player Name: auto
 POV (1=1st, 2=2nd, 3=3rd): 2
 Model Profile (Stable/Balanced/Full): Balanced
 Scenario Auto-Discovery: true
 Thought Chance (0-100): 60
 Half Thought Chance: true
-Max Brain Context (1-95): 25
+Max Brain Context (1-95): 18
 Context Guard Buffer (200-3000): 600
 Lookback Turns (1-20): 5
-Max Active NPCs (1-5): 3
+Max Active NPCs (1-5): 2
 Pin Config Card: false
 Visual Indicator: true
 Volatile Decay (1-10): 3
@@ -167,64 +227,152 @@ Agentic Charter: true
 Auto Doctor: true
 Bootstrap Empty Brains: true
 World Memory: false
+World Cards: false
 Memory Slots: true
 Thought Quality Gate: true
-Max Brain Keys (3-20): 6
+Max Brain Keys (3-20): 14
 Max Lore Keys (3-30): 8
 ```
 
-The card notes include a commented guide. Lines beginning with `//` are ignored
-by NPC registration, so examples and instructions do not become agents.
+</details>
 
-`Player Name: auto` tries to detect resolved scenario setup text such as
-`Your name is ${Your name?}` after AI Dungeon has replaced the placeholder with
-the player's answer. If the name cannot be detected, MindForge falls back to
-`protagonist`. A manually written name always wins.
+After opting in, keep the maintenance and quality features enabled for normal
+play. Set the POV and player name to match your scenario. Bootstrap can request
+initial memories even when the ordinary thought chance is low or zero; disable
+it if you want to prevent those requests too.
 
-`Scenario Auto-Discovery: true` adds only high-confidence main NPCs to the
-config notes. Strong signals include `{ Main NPC: Name: Clara }`,
-`The person who finds you is Clara`, or `Open only when Clara arrives` plus
-normal third-person NPC action. Ambiguous labels such as `CustomThing: Leo` or
-non-character blocks such as `Location: Name: Berlin` are ignored.
+### Context and cache behavior
 
-## Model Profiles
+When the host supplies `info.useCacheEfficient === true`, MindForge preserves
+the incoming context exactly and only appends what fits, with a 160-character
+margin. Stored primary memory and core identity take priority over requesting
+a new thought. A completely full cache prefix can leave no room for additions.
 
-| Profile | Use When | Behavior |
-|---|---|---|
-| `Stable` | Cache, free, smaller, or fragile models | Shorter prompt, one active NPC, lower memory pressure |
-| `Balanced` | Most public scenarios | Multi-NPC support with controlled context usage |
-| `Full` | Strong models and larger context windows | More expressive Brain Steward prompt and larger memory budget |
+Standard mode can trim a bounded amount of the oldest `Recent Story` to fit
+memory, while retaining instructions outside that section and the latest scene
+under normal budget pressure. Read-only turns omit editing keys and the longer
+maintenance instructions, keeping selected thought sentences and ownership.
 
-MindForge can also shift into conservative or guarded runtime behavior after
-repeated empty outputs, skipped commits, or context pressure.
+`state.MindForge.contextStats` reports added/removed characters, memory budget,
+prefix preservation, compact mode, and task delivery. These are script-side
+diagnostics, not measurements of the host's actual cache-hit rate.
 
-## Brain Notes
+### Updating existing adventures
 
-NPC brain cards store simple key/value memories:
+Replace all four script tabs together. Existing configuration entries remain
+authoritative: an adventure already set to `Enabled: true` stays enabled. New
+configurations, or older ones without an Enabled setting, start disabled. Change
+an existing card to `Enabled: false` if you want to pause its memory system.
+Review old settings if you want the other new defaults. Older brain
+metadata may contain a `chance` or `budget` value inherited from an earlier
+version. Remove that field from the brain card's JSON keys if you want it to
+inherit the current config again; intentional per-NPC overrides can remain.
 
-```text
-core_identity: Clara protects the archive above everything else.
-relationship_player: Clara trusts the player with the sealed map.
-goal_current: Clara wants to find the hidden door.
-plan_next: Clara will search the western shelf.
-secret_hidden: Clara knows the captain lied.
-state_current: Clara is trying not to show fear.
-_mood(3): Clara is angry for the next few turns.
-background: Clara once failed to save the old library.
-```
+## Optional World Memory and World Cards
 
-Rules:
+With MindForge enabled, enable **World Memory** to retain public observations
+about named places and objects. Also enable **World Cards** to create
+specific-name-triggered cards after qualifying mentions on two different turns.
 
-- `core_*` memories are durable and protected.
-- `_key(n)` memories are temporary and decay over turns.
-- `background` stores compacted lower-value memories.
-- Existing keys are updated when the idea is the same.
-- Duplicate thoughts are skipped instead of bloating the brain.
+- Up to three recent, distinct, complete observations are retained per entity.
+- Quoted claims, obvious hypothetical statements, and incomplete sentences are
+  skipped. Detection is heuristic and may miss unusual or indirect references.
+- Retrieval works without an active NPC and avoids repeating exact observations
+  already present in the host context.
+- Creator cards with matching titles/triggers are respected. Editing a generated
+  card's entry, title, keys, or type pauses automatic updates.
+- Disabling automation clears triggers on untouched managed cards. Edited cards
+  remain under creator control.
 
-## Commands
+No additional AI call is needed. Generated cards still consume context when the
+host selects them. This is a bounded observation system; Inner Self's optional
+Auto-Cards integration offers broader model-assisted worldbuilding automation.
 
-Players do not need these during normal play, but creators can inspect or
-repair brains manually:
+## Comparison with Inner Self
+
+**Measured on September 23, 2026.** These are controlled local script tests with
+supplied model outputs and MindForge explicitly enabled. They measure context
+assembly and parser behavior, not live story quality, model compliance,
+inference speed, or actual cache reuse.
+
+### Active memory overhead
+
+Same 1,000-character host input, three stored memories, and a memory-update task:
+
+| Script / mode | Extra context characters | Memories retained |
+|---|---:|---:|
+| **MindForge — standard or cache** | **768** | **3/3** |
+| [Inner Self — standard](https://github.com/LewdLeah/Inner-Self) | 2,319 | 3/3 |
+| [KV Inner Self — cache](https://github.com/Zoocata1/KV-Inner-Self) | 2,320 | 3/3 |
+| [Optimized Context Inner Self — standard](https://github.com/XloSky/Optimized-Context-Inner-Self) | 2,048 | 3/3 |
+| Optimized Context Inner Self — cache | 1 in context + 1,988 in a task card | 3/3 in the card |
+
+MindForge uses **about 67% fewer added characters than original / KV Inner Self**
+in this fixture. Task-card text is not free context; same-turn host selection of
+that card is not assumed.
+
+### Reference token counts
+
+Offline BPE counts use `gpt-tokenizer` 4.0.0. These are named reference encodings,
+not a claim about the tokenizer used by a particular AI Dungeon model. Counts
+below measure added or reformatted text, separately from any removed host text.
+
+| Fixture / script | `cl100k_base` | `o200k_base` |
+|---|---:|---:|
+| **Active — MindForge** | **171** | **169** |
+| Active — original Inner Self, standard | 524 | 526 |
+| Active — KV Inner Self, cache | 521 | 522 |
+| **Passive — MindForge** | **52** | **51** |
+| Passive — original Inner Self, standard | 83 | 83 |
+| Passive — KV Inner Self, cache | 79 | 78 |
+
+The passive fixture retains the same three thoughts in **247 characters**,
+versus 318–320 in original / KV Inner Self. Compared with KV, the added-text token
+reduction is approximately **67% active** and **34–35% passive** on these encodings.
+The original standard-path rows also remove/reformat 5 and 6 input tokens
+respectively; whole-prompt deltas are not the same as added-text cost.
+
+### Output handling
+
+| Script | Normal narration preserved | Tested leaks cleaned | Native operation recovery |
+|---|---:|---:|---:|
+| **MindForge** | **60/60** | **32/32** | **3/3** |
+| Inner Self | 40/60 | 12/32 | 3/3 |
+| KV Inner Self | 40/60 | 12/32 | 3/3 |
+| Optimized Context Inner Self | 40/60 | 12/32 | 3/3 |
+
+The corpus repeats 20 narrative examples across three activation states and 16
+leak examples across two states. It includes adverse cases and was used during
+development, so these fractions are **test coverage, not production failure
+rates**. Passing every example does not guarantee zero leaks for arbitrary
+model outputs.
+
+Other results: MindForge delivered all five supplied memories in the two-NPC
+fixture and retained a complete owned memory with only 300 characters of free
+cache space. All four scripts passed the supplied 120-turn overwrite sequences;
+that does not establish superior long-term storytelling or retention.
+
+<details>
+<summary>Comparison setup and source versions</summary>
+
+- Node 22.20.0; isolated hooks with JSON-persisted state and cards.
+- Three seeds: 1, 17, 42. Ten context cases in standard/cache modes.
+- Shared active settings: 100% thought chance, 30% allocation, five-action
+  lookback, second-person POV. MindForge profile: Balanced.
+- Passive cases disable bootstrap and set thought chance to zero.
+- Optional world generation and Auto-Cards disabled; NGO/SAE bundles excluded.
+- Every implementation receives its own native operation syntax with matched
+  thought content. Generated card payloads are measured separately.
+- Coverage: 240 context observations, 368 output observations, and 960 supplied
+  sequence turns across the four implementations.
+- Inner Self: `297a1a0`; KV Inner Self: `a879e93`; Optimized Context: `0b6808a`.
+
+</details>
+
+## Optional commands
+
+Players do not need commands during normal play. When MindForge is enabled,
+these commands are available for inspection or manual edits:
 
 ```text
 /mf status
@@ -235,83 +383,10 @@ repair brains manually:
 /mf clear <agent>
 ```
 
-## MindForge vs Inner Self
+## Credits and license
 
-MindForge is inspired by Inner Self, but it has a different product target:
-lighter NPC private minds with strong automatic maintenance. Inner Self and
-Auto-Cards are broader world/story-card automation tools. Use the comparison
-below as a positioning guide, not as a claim that both projects try to solve
-the same problem in the same way.
+MindForge is an independent project by **Leolynn**, inspired by
+[Inner Self](https://github.com/LewdLeah/Inner-Self) by **LewdLeah** and the AI
+Dungeon scripting community. Thank you for the inspiration.
 
-Legend: ✅ built in, ⚙️ optional or partial, ❌ not included / intentionally out of scope.
-
-| Capability | MindForge | Inner Self / Auto-Cards |
-|---|---:|---:|
-| Persistent per-NPC brain cards | ✅ | ✅ |
-| Private inner-life prompt for NPC agency | ✅ compact charter | ✅ rich dramatic framing |
-| Hands-off play without player commands | ✅ | ✅ |
-| Self-documenting creator control card | ✅ | ✅ |
-| Public-scenario default with low maintenance | ✅ | ⚙️ broader setup surface |
-| Silent brain repair and compaction | ✅ Auto Doctor | ⚙️ broader repair systems |
-| Duplicate memory suppression | ✅ | ⚙️ different memory model |
-| Core memory protection (`core_*`) | ✅ | ❌ no matching convention |
-| Volatile turn-decay memories (`_key(n)`) | ✅ | ❌ no matching convention |
-| Multi-NPC Active/Present context budgeting | ✅ | ⚙️ different focus |
-| Scene lock for primary NPC stability | ✅ | ❌ no matching feature |
-| Strict output quality gate | ✅ | ⚙️ different parser strategy |
-| Bracket/parenthesis/brace/loose-op parser repair | ✅ | ✅ strong parser maturity |
-| Optional shared world memory | ⚙️ lightweight, default off | ✅ stronger Auto-Cards ecosystem |
-| Automatic full story-card generation | ❌ intentionally out of scope | ✅ |
-| Repository regression tests | ✅ included | ❌ not included in this package |
-| Runtime footprint | ~2k-line library | ~8.6k-line all-in-one reference |
-
-**Short version:** choose MindForge if you want a compact NPC memory engine that
-keeps itself clean. Choose Inner Self / Auto-Cards style tooling if your main
-goal is broad automatic story-card and worldbuilding generation.
-
-## Project Layout
-
-```text
-src/
-  input.js
-  context.js
-  output.js
-  library.js
-scripts/
-  build-release.js
-tests/
-  mindforge.test.js
-dist/
-  built files ready to copy into AI Dungeon
-```
-
-## Development
-
-Run syntax checks:
-
-```bash
-npm run check
-```
-
-Run the regression test harness:
-
-```bash
-npm test
-```
-
-Build the release package:
-
-```bash
-npm run build
-```
-
-## License
-
-MIT License. Copyright (c) 2026 Leolynn.
-
-## Attribution
-
-MindForge is an independent project by Leolynn.
-
-Inspired by Inner Self by LewdLeah and by the broader AI Dungeon scripting
-community.
+Released under the [MIT License](LICENSE). See [NOTICE](NOTICE).
