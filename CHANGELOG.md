@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — Restore proven Thought Forge task
+
+- Restore the May 2025 "MindForge Thought Forge" task wording after two live
+  DeepSeek V4 Flash traces showed the model ignoring the structured rewrites
+  even when the complete task was delivered untruncated.
+- The restored task names a concrete operation example, key/thought rules, and
+  the behavior-changing thought types, and keeps memory-first output order.
+- Keep whole-task budgeting and diagnostics capture; `contextStats.taskFormat`
+  reports `thought-forge-v1` on active turns.
+- Strip full and partial Thought Forge task echoes from Output; keep stripping
+  older structured v2/v3 echoes.
+- Remeasure the matched three-memory payload: 1,569 added characters and
+  338/337 reference tokens; passive delivery remains 247 characters and 52/51.
+- The older wording is the build the user reported working, but this restored
+  revision has not yet been re-tested in-game.
+
 ## Unreleased — Structured memory task
 
 - Replace the compact task paragraph with a separate MEMORY/STORY instruction

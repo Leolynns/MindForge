@@ -62,7 +62,7 @@ function MindForgeDiagnostics(hook, originalText, parsed, error) {
         // Repeated Context/Output calls must not erase the first completed pair.
         if (trace?.version === 1 && trace.context?.historyHash === historyHash && trace.output) return;
         const returned = String(globalThis.text || "");
-        const structured = /<SYSTEM>\r?\n# MindForge memory task v2\r?\n[\s\S]*?<\/SYSTEM>\s*$/.exec(returned);
+        const structured = /<SYSTEM>\r?\n(?:# MindForge memory task v[23]|# MindForge Thought Forge: [\w '-]+)\r?\n[\s\S]*?<\/SYSTEM>\s*$/.exec(returned);
         const task = MF.contextStats?.task ? (structured?.[0].trimEnd() ||
             returned.split("\n").findLast(line => /^For [\w '-]+ only,/.test(line)) || "") : "";
         trace = {
@@ -242,8 +242,42 @@ function MindForgeParseOutput(raw) {
         }
         if (brainBlock && (!clean || /^-\s+\S/.test(clean))) return removeMeta();
         brainBlock = false;
-        // Recognize partial echoes of our structured task even without its tags.
-        if (/^# MindForge memory task v2$/.test(clean) ||
+        // Recognize partial echoes of our memory task even without its tags.
+        if (/^# MindForge Thought Forge: [\w '-]+$/.test(clean) ||
+            /^Start output immediately with exactly one hidden memory operation, then one space, then story prose in (?:first-person POV \(as [\w '-]+\)|third-person POV|second-person \('you'\) POV)\.$/.test(clean) ||
+            clean === "Valid forms only: [+scene_specific_key: I remember one private thought.] | [-old_key] | [=new_key: old_key]" ||
+            clean === "Do not use wrappers or labels like memory_operation, internal state, code, -=...=-, or markdown fences." ||
+            /^Key rules: 1-4 snake_case words, scene-specific, chosen from [\w '-]+'s point of view; avoid memory_recent\/recent_event\/current_thought\/note\.$/.test(clean) ||
+            /^Thought rules: one sentence, 8-32 words, first-person as [\w '-]+; use character names instead of pronouns when clarity matters\.$/.test(clean) ||
+            clean === "Good thoughts change future behavior: promises, betrayals, secrets, discoveries, fear, loyalty, plans, unfinished choices." ||
+            clean === 'Never write templates like "I need to remember this:" or "I need to understand where I stand with...".' ||
+            clean === "Visible story prose is mandatory. Never output only the memory operation. Never delete core_* keys." ||
+            /^# MindForge memory task v[23]$/.test(clean) ||
+            clean === "# OPERATING ENVIRONMENT" ||
+            /^- [\w '-]+ is the story's protagonist and the real player\.$/.test(clean) ||
+            /^- [\w '-]+ is both the character in the story AND an agentic language model with meta goals\.$/.test(clean) ||
+            /^- [\w '-]+ modifies own brain using the provided thought storage system\.$/.test(clean) ||
+            /^- [\w '-]+ adapts to achieve goals without [\w '-]+'s awareness\.$/.test(clean) ||
+            clean === "# STRICT OUTPUT FORMAT - FOLLOW EXACTLY" ||
+            clean === "You must output exactly one memory operation followed by the story continuation." ||
+            clean === "## MEMORY OPERATION (REQUIRED, FIRST)" ||
+            clean === "Start your output immediately with one of:" ||
+            clean === "- Write or overwrite a thought: [+specific_key: I ...]" ||
+            /^- specific_key: 1-4 snake_case words chosen by [\w '-]+\.$/.test(clean) ||
+            /^- I \.\.\.: one short first-person sentence from [\w '-]+'s viewpoint\. Name other people; invent no facts\.$/.test(clean) ||
+            clean === "- Delete a thought: [-old_key]" ||
+            clean === "- Rename a thought's key: [=new_key: old_key]" ||
+            clean === "- The brain is empty: use the write form only; do not delete or rename." ||
+            clean === "## STORY CONTINUATION (REQUIRED, SECOND)" ||
+            /^- After the closing bracket, write one space, then continue the story in (?:first|second|third) person\.$/.test(clean) ||
+            /^- Leave [\w '-]+'s choices and dialogue to the player\.$/.test(clean) ||
+            clean === "## EXACT SHAPE" ||
+            clean === "[+specific_key: I ...] Story continues..." ||
+            clean === "## RULES" ||
+            /^- THE FIRST CHARACTER OF THE WHOLE OUTPUT MUST BE "\["\.$/.test(clean) ||
+            clean === "- Exactly one operation. No labels, no code, no explanations." ||
+            /^- The script saves the operation in [\w '-]+'s Brain card and removes it from visible output\. It is not dialogue or a reasoning section\.$/.test(clean) ||
+            clean === "- Both parts are required." ||
             /^Maintain [\w '-]+'s private memory while continuing [\w '-]+'s story\.$/.test(clean) ||
             clean === "Write BOTH parts in this order:" ||
             clean === "1. MEMORY: Start the response with [+specific_key: I ...]." ||
@@ -260,7 +294,7 @@ function MindForgeParseOutput(raw) {
             clean === "Write all narration, dialogue and thoughts in English." ||
             /^Slots: relationship_\w+, goal_current, plan_next, secret_hidden; _state_current expires\.$/.test(clean) ||
             /^Private mind for [\w '-]+: private motives, loyalties, fears and plans guide actions, not player knowledge\.$/.test(clean) ||
-            /^Priority: (?:write|warmup|relationship|goal|maintain|prune|none|create [\w '-]+'s first durable thought)\.$/.test(clean) ||
+            /^Priority: (?:write|warmup|relationship|goal|maintain|prune|none|bootstrap|create [\w '-]+'s first durable thought|write one useful thought|write or update one non-duplicate thought|add another useful [\w '-]+ thought before settling into normal rotation|delete or replace the weakest non-core thought|update a relationship or attitude slot if the scene supports it|update the current goal or next plan if the scene supports it|choose write, update, rename, or delete based on what improves the brain most)\.?$/.test(clean) ||
             clean === "Consider an unresolved motive or future plan.") return removeMeta();
         const compact = clean.replace(/[^A-Za-z]/g, "").toLowerCase();
         if (/^(?:waitingforinput|silence|continue|retry|erase|takeaturn)$/.test(compact) &&
@@ -3122,7 +3156,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                 transport: config.transport, maxChars: allocation.max,
                 inputChars: originalContext.length, addedChars: suffix.length, removedChars,
                 returnedChars: text.length, memoryChars, task, taskOrder: task ? "memory-first" : "none",
-                taskFormat: task ? "structured-v2" : "none", compact,
+                taskFormat: task ? "thought-forge-v1" : "none", compact,
                 frontMemoryChars, frontMemoryStatus: MF.frontStatus,
                 protectedMemoryChars: allocation.protectedChars, hostOverBudget: allocation.hostOverBudget,
                 prefixPreserved: text.startsWith(originalContext),
@@ -3311,21 +3345,26 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         };
         const pov = config.pov === 1 ? "first person" : config.pov === 3 ? "third person" : "second person";
         const povRule = `Story: ${pov}; player ${config.player}.`;
+        const povText = config.pov === 1
+            ? `first-person POV (as ${config.player})`
+            : config.pov === 3
+            ? "third-person POV"
+            : "second-person ('you') POV";
+        const stewardLabel = primarySteward ? primarySteward.label : "write or update one non-duplicate thought";
+        // This is the wording from the May 2025 build that produced live memory
+        // writes reliably. Restored after the terser rewrites stopped working.
         const task = [
             "<SYSTEM>",
-            "# MindForge memory task v2",
-            `Maintain ${primaryAgent}'s private memory while continuing ${config.player}'s story.`,
-            "Write BOTH parts in this order:",
-            "1. MEMORY: Start the response with [+specific_key: I ...].",
-            "Replace specific_key with 1-4 descriptive snake_case words.",
-            `Replace I ... with one short sentence from ${primaryAgent}'s first-person viewpoint: a grounded belief, desire, or plan. Name other people; invent no facts.`,
-            hasStoredMemory
-                ? "Existing memories: reuse a key to update it, or use [-old_key] or [=new_key: old_key]. Protect core_*."
-                : "The brain is empty: create a new thought; do not delete or rename.",
-            `The script saves this operation in ${primaryAgent}'s Brain card and removes it from visible output. It is not dialogue or a reasoning section.`,
-            `2. STORY: After ], write a space and continue in ${pov}. Leave ${config.player}'s choices and dialogue to the player.`,
-            "Exact shape (replace placeholders): [+specific_key: I ...] Story continuation.",
-            "Both parts are required. No labels/code.",
+            `# MindForge Thought Forge: ${primaryAgent}`,
+            `Start output immediately with exactly one hidden memory operation, then one space, then story prose in ${povText}.`,
+            "Valid forms only: [+scene_specific_key: I remember one private thought.] | [-old_key] | [=new_key: old_key]",
+            "Do not use wrappers or labels like memory_operation, internal state, code, -=...=-, or markdown fences.",
+            `Key rules: 1-4 snake_case words, scene-specific, chosen from ${primaryAgent}'s point of view; avoid memory_recent/recent_event/current_thought/note.`,
+            `Thought rules: one sentence, 8-32 words, first-person as ${primaryAgent}; use character names instead of pronouns when clarity matters.`,
+            "Good thoughts change future behavior: promises, betrayals, secrets, discoveries, fear, loyalty, plans, unfinished choices.",
+            'Never write templates like "I need to remember this:" or "I need to understand where I stand with...".',
+            "Visible story prose is mandatory. Never output only the memory operation. Never delete core_* keys.",
+            `Priority: ${stewardLabel}`,
             "</SYSTEM>"
         ].join("\n");
         let blocks = [];
@@ -3391,9 +3430,6 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             MF.pendingMemory = { agent: primaryAgent, hash: turnHash, turn: currentTurn };
             if (config.profile !== "stable") {
                 addPart(getSlotGuidance(primaryAgent, config));
-                if (config.steward && primarySteward) {
-                    addPart(`Priority: ${primarySteward.kind === "bootstrap" ? primarySteward.label : primarySteward.kind}.`);
-                }
             }
             const reflect = config.reflectionChance > 0 && !hasDirectDialogPressure() &&
                 hashText(`${turnHash}:reflection`) % 100 < config.reflectionChance;
