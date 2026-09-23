@@ -3381,8 +3381,12 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             ? "third-person POV"
             : "second-person ('you') POV";
         const stewardLabel = primarySteward ? primarySteward.label : "write or update one non-duplicate thought";
+        const reflect = config.reflectionChance > 0 && !hasDirectDialogPressure() &&
+            hashText(`${turnHash}:reflection`) % 100 < config.reflectionChance;
         // This is the wording from the May 2025 build that produced live memory
-        // writes reliably. Restored after the terser rewrites stopped working.
+        // writes reliably. Task turns follow the proven layout: the story and
+        // brain are followed directly by this single block, with no other
+        // instruction paragraphs in between.
         const task = [
             "<SYSTEM>",
             `# MindForge Thought Forge: ${primaryAgent}`,
@@ -3395,6 +3399,10 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             'Never write templates like "I need to remember this:" or "I need to understand where I stand with...".',
             "Visible story prose is mandatory. Never output only the memory operation. Never delete core_* keys.",
             `Priority: ${stewardLabel}`,
+            ...(reflect ? ["Consider an unresolved motive or future plan."] : []),
+            ...(config.profile === "full"
+                ? [getAgenticCharter(primaryAgent, config), getSlotGuidance(primaryAgent, config)].filter(Boolean)
+                : []),
             "</SYSTEM>"
         ].join("\n");
         let blocks = [];
@@ -3427,15 +3435,16 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             blocks.sort((a, b) => Number(a.primary) - Number(b.primary));
             parts.push(...blocks.map(block => block.text));
         };
-        if (!hasEnglishRule) addPart(englishRule);
         packMemory(false);
-        const canWrite = !isRetry && triggerChance && (hasEnglishRule || parts.includes(englishRule)) &&
+        const canWrite = !isRetry && triggerChance &&
             (!hasStoredMemory || hasPrimaryMemory) && (!hasStoredCore || hasPrimaryCore);
-        const taskFits = canWrite && used + povRule.length + task.length + 4 <= suffixRoom;
+        const taskFits = canWrite && used + task.length + 4 <= suffixRoom;
         if (taskFits) {
-            addPart(povRule);
-            // Reserve the complete task before optional guidance; append it last.
-            used += task.length + 2;
+            // Proven layout parity: on write turns the task block is the only
+            // addition after the story and brain. The POV is carried inside the
+            // task itself; the English directive stays on read-only turns, and
+            // slot guidance and charter are Full-profile additions inside the block.
+            MF.pendingMemory = { agent: primaryAgent, hash: turnHash, turn: currentTurn };
         } else {
             // Read-only turns need values, not editing keys or a maintenance charter.
             // Keep the ownership header and every selected sentence verbatim.
@@ -3456,16 +3465,6 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                 }
             }
         }
-        if (taskFits) {
-            MF.pendingMemory = { agent: primaryAgent, hash: turnHash, turn: currentTurn };
-            if (config.profile !== "stable") {
-                addPart(getSlotGuidance(primaryAgent, config));
-            }
-            const reflect = config.reflectionChance > 0 && !hasDirectDialogPressure() &&
-                hashText(`${turnHash}:reflection`) % 100 < config.reflectionChance;
-            if (reflect) addPart("Consider an unresolved motive or future plan.");
-        }
-        if (taskFits) addPart(getAgenticCharter(primaryAgent, config));
         addPart(getWorldContext(sceneText, config, base, Math.min(600, suffixRoom - used - 2)));
         if (taskFits) parts.push(task);
         MF.delivery = { hash: turnHash, agent: primaryAgent, task: Boolean(taskFits), consumed: false };

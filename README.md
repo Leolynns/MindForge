@@ -349,8 +349,11 @@ Active tasks now request the memory operation **before** the story. The task is
 the restored **"MindForge Thought Forge"** wording from the May 2025 build that
 produced live memory writes: it names a concrete example operation, key and
 thought rules, and the behavior-changing thought types, then asks for visible
-story prose after the operation. The complete task is reserved before optional
-guidance and appended as the final context block.
+story prose after the operation. On write turns the task block follows the story
+and brain **directly** — no other instruction paragraphs sit in between, matching
+the proven layout. The POV requirement is carried inside the task; the reflection
+hint and Full-profile slot/charter guidance also live inside it. Read-only turns
+keep the English directive, compact memory, and POV rule.
 `state.MindForge.contextStats.taskOrder` is `memory-first` when a task is included
 and `none` otherwise; `contextStats.taskFormat` reports `thought-forge-v1`
 (`none` on read-only turns). A task that cannot fit the context budget is

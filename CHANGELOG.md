@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Proven task layout parity
+
+- Write turns now place the task block directly after the story and brain, with
+  no other instruction paragraphs in between — the layout of the May 2025 build
+  that produced live writes. The English directive, POV rule, slot guidance, and
+  charter no longer sit between the story and the task on write turns.
+- The POV requirement is carried inside the task block; the reflection hint and
+  Full-profile slot/charter guidance move inside it. Read-only turns keep the
+  English directive, compact memory, and POV rule.
+- Update the English contract: the directive is delivered on read-only and
+  no-agent turns; write turns rely on the documented AI Instructions line.
+
 ## Unreleased — Command input formats
 
 - Accept `/mf` commands in all three AI Dungeon input formats: Do (`> You
