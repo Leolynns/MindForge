@@ -26,10 +26,12 @@ continues playing normally.
   avoids empty Input/Output returns that the host rejects.
 - **Optional FrontMemory experiment:** can stage existing primary-NPC memories
   in the host's shared memory field, with delivery checks and automatic cleanup.
-- **Inner Self-style prompts:** write turns use the same operating-environment
-  directive and strict-format task as Inner Self, with the parenthesized
-  `(key = \`thought\`)` operation. The matched three-memory fixture costs 2,301
-  added characters (Inner Self: 2,319). Passive turns stay compact at 247.
+- **~36% cheaper than Inner Self with the same prompt structure:** the default
+  **Compact** prompt style keeps the operating-environment directive, the
+  strict-format task, and the parenthesized `(key = \`thought\`)` operation with
+  condensed wording. The matched three-memory fixture costs 1,492 added
+  characters and 332/330 reference tokens (Inner Self: 2,319 / 524/526).
+  **Full** style is available in the config as an opt-in fallback.
 - **Compact passive turns:** 247 characters for the same three memories. Read-only
   turns keep complete thoughts and their owner while omitting editing syntax.
 - **Memory before prose on write turns:** the model is asked to begin with one
@@ -351,15 +353,17 @@ Write turns mirror Inner Self's proven prompt structure: an **operating
 environment** directive (the NPC is also an agentic model that maintains its own
 brain) plus a **strict-format task** that asks for one parenthesized
 `(key = \`thought\`)` operation followed by the story, ending with the exact
-output-shape example. MindForge's parser accepts the parenthesized syntax as a
-legacy form, so storage, labels, and quality gates are unchanged. Balanced keeps
-pure parity; the Full profile adds the steward priority, charter, and slot
-guidance inside the task block. Read-only turns keep the English directive,
-compact memory, and POV rule.
+output-shape example. The default **Compact** style condenses the wording of both
+blocks while keeping the structure, syntax, and example; **Full** keeps Inner
+Self's verbatim text and is available in the config. MindForge's parser accepts
+the parenthesized syntax as a legacy form, so storage, labels, and quality gates
+are unchanged. Balanced keeps pure parity; the Full profile adds the steward
+priority, charter, and slot guidance inside the task block. Read-only turns keep
+the English directive, compact memory, and POV rule.
 `state.MindForge.contextStats.taskOrder` is `memory-first` when a task is included
-and `none` otherwise; `contextStats.taskFormat` reports `inner-self-style-v1`
-(`none` on read-only turns). A task that cannot fit the context budget is
-deferred as a whole.
+and `none` otherwise; `contextStats.taskFormat` reports `inner-self-compact-v1`
+or `inner-self-style-v1` (`none` on read-only turns). A task that cannot fit the
+context budget is deferred as a whole.
 
 The task's `<SYSTEM>` delimiters are prompt text, not an API system-role change.
 Live DeepSeek V4 Flash traces in September 2026 returned only prose with every
@@ -468,14 +472,14 @@ Same 1,000-character host input, three stored memories, and a memory-update task
 
 | Script / mode | Extra context characters | Memories retained |
 |---|---:|---:|
-| **MindForge — standard or cache** | **2,301** | **3/3** |
+| **MindForge — standard or cache** | **1,492** | **3/3** |
 | [Inner Self — standard](https://github.com/LewdLeah/Inner-Self) | 2,319 | 3/3 |
 | [KV Inner Self — cache](https://github.com/Zoocata1/KV-Inner-Self) | 2,320 | 3/3 |
 | [Optimized Context Inner Self — standard](https://github.com/XloSky/Optimized-Context-Inner-Self) | 2,048 | 3/3 |
 | Optimized Context Inner Self — cache | 1 in context + 1,988 in a task card | 3/3 in the card |
 
-MindForge now matches Inner Self's active cost in this fixture (2,301 vs 2,319
-added characters) because it uses the same proven prompt. Task-card text is not
+MindForge adds about **36% fewer characters than original / KV Inner Self** in
+this fixture while using the same proven prompt structure. Task-card text is not
 free context; same-turn host selection of that card is not assumed.
 
 ### Reference token counts
@@ -486,7 +490,7 @@ below measure added or reformatted text, separately from any removed host text.
 
 | Fixture / script | `cl100k_base` | `o200k_base` |
 |---|---:|---:|
-| **Active — MindForge** | **507** | **508** |
+| **Active — MindForge** | **332** | **330** |
 | Active — original Inner Self, standard | 524 | 526 |
 | Active — KV Inner Self, cache | 521 | 522 |
 | **Passive — MindForge** | **52** | **51** |
@@ -494,11 +498,10 @@ below measure added or reformatted text, separately from any removed host text.
 | Passive — KV Inner Self, cache | 79 | 78 |
 
 The passive fixture retains the same three thoughts in **247 characters**,
-versus 318–320 in original / KV Inner Self. Active token counts are now at
-parity with Inner Self (~3% below KV) because the proven prompt is used verbatim;
-passive delivery remains approximately **34–35% smaller** on these encodings.
-The original standard-path rows also remove/reformat 5 and 6 input tokens
-respectively; whole-prompt deltas are not the same as added-text cost.
+versus 318–320 in original / KV Inner Self. Compared with KV, the added-text token
+reduction is approximately **36% active** and **34–35% passive** on these
+encodings. The original standard-path rows also remove/reformat 5 and 6 input
+tokens respectively; whole-prompt deltas are not the same as added-text cost.
 
 ### Output handling
 
@@ -525,9 +528,9 @@ that does not establish superior long-term storytelling or retention.
 
 - Node 22.20.0; isolated hooks with JSON-persisted state and cards.
 - Three seeds: 1, 17, 42. Ten context cases in standard/cache modes.
-- Active measurements use the `inner-self-style-v1` prompt (operating
-  environment + strict-format task). Earlier 768-, 901-, 1,399-, and
-  1,569-character figures described shorter task revisions and are superseded.
+- Active measurements use the default Compact prompt style. Earlier 768-,
+  901-, 1,399-, 1,569-, and 2,301-character figures described other prompt
+  revisions and are superseded.
 - Shared active settings: 100% thought chance, 30% allocation, five-action
   lookback, second-person POV. MindForge profile: Balanced; transport: Context.
 - Passive cases disable bootstrap and set thought chance to zero.

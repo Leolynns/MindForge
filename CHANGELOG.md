@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Compact prompt default
+
+- Add `Prompt Style (Full/Compact)` with **Compact as the default**. Compact
+  keeps the proven Inner Self structure — operating-environment directive,
+  strict-format task, exact-shape example, parenthesized operation — with
+  condensed wording: 286 vs 461 added tokens on an empty brain (-38%), and
+  332/330 vs 507/508 tokens in the matched three-memory fixture (-36%).
+- Full keeps Inner Self's verbatim text as an opt-in fallback; tests cover both
+  styles, including echo-stripping of every compact line.
+- The parenthesized syntax, storage, labels, and quality gates are unchanged.
+- Live model compliance of the Compact prompt has not been verified yet; the
+  user can switch to Full at any time in the config card.
+
 ## Unreleased — Inner Self-style prompt parity
 
 - Adopt Inner Self's proven prompt structure: an "OPERATING ENVIRONMENT"

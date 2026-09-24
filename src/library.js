@@ -333,7 +333,7 @@ function MindForgeParseOutput(raw) {
             clean === '- Then a space, then "=", then a space, then "`"' ||
             clean === "- Sentence:" ||
             /^- Written from [\w '-]+'s \*\*[^*]+\*\*/.test(clean) ||
-            /^- Never focus on the present, instead focus [\w '-]+'s thought on self-reflection or future plans$/.test(clean) ||
+            /^- Never focus on the present, instead focus [\w '-]+'s thought on self-reflection or future plans\.?$/.test(clean) ||
             /^- Avoid using pronouns or the word "you", instead [\w '-]+ refers to other characters directly by name$/.test(clean) ||
             clean === "- Never repeat, novelty and uniqueness are top priorities" ||
             /^- [\w '-]+'s thought must be one single sentence only$/.test(clean) ||
@@ -343,7 +343,7 @@ function MindForgeParseOutput(raw) {
             clean === "## STORY CONTINUATION (REQUIRED)" ||
             clean === "- After the closing parenthesis, write **one space** and then continue the story" ||
             clean === "- The story continues where it previously left off, with many lines or sentences of new prose" ||
-            /^\(example_key = `[\s\S]*`\) Story continues .*$/.test(clean) ||
+            /^(?:EXACT SHAPE: )?\(example_key = `[\s\S]*`\) Story continues .*$/.test(clean) ||
             /^- [\w '-]+ is both the perspective \("you"\) character of the story AND the real player\.$/.test(clean) ||
             /^- You are [\w '-]+, therefore the story is addressed to "you" using 2nd person prose\.$/.test(clean) ||
             /^- [\w '-]+ is the story's main protagonist, primary (?:1st|3rd) person PoV, AND the real player character\.$/.test(clean) ||
@@ -351,7 +351,16 @@ function MindForgeParseOutput(raw) {
             /^- [\w '-]+ dynamically adapts to achieve meta goals without [\w '-]+'s awareness\.$/.test(clean) ||
             /^- [\w '-]+ realistically interacts with various other characters present in the story\.$/.test(clean) ||
             /^- [\w '-]+ prioritizes information density, long-term planning, and important concepts\.$/.test(clean) ||
-            /^- [\w '-]+ always behaves in a believable way\.$/.test(clean)) return removeMeta();
+            /^- [\w '-]+ always behaves in a believable way\.$/.test(clean) ||
+            /^- [\w '-]+ is the "you" character of the story AND the real player; the story addresses [\w '-]+ as "you"\.$/.test(clean) ||
+            /^- [\w '-]+ is the story's main protagonist AND the real player\.$/.test(clean) ||
+            /^- [\w '-]+ is a character in the story AND an agent with private goals, pursued without [\w '-]+'s awareness\.$/.test(clean) ||
+            /^- [\w '-]+ maintains own brain using the provided thought storage system, behaves believably, and prioritizes information density and long-term planning\.$/.test(clean) ||
+            /^- Key: 1-4 snake_case words, letters and underscores only; chosen by [\w '-]+, distinct and easy to recall\.$/.test(clean) ||
+            /^- Sentence: one single first-person sentence as [\w '-]+\. Name other characters directly; never "she", "he", "they" or "you"\. Never repeat; never hallucinate\.$/.test(clean) ||
+            /^- End the sentence with a period and backtick inside the parentheses; close with/.test(clean) ||
+            /^- Then one space, and continue the story in (?:first|second|third) person(?: present tense)?, with several sentences of new prose\.$/.test(clean) ||
+            clean === "Reusing an existing key overwrites that thought; a new key creates one.") return removeMeta();
         if (/^For [\w '-]+ only, (?:after the story (?:optionally )?append one line\b|start your response with one memory operation:)/.test(clean) ||
             /^Story: (?:first|second|third) person; player [\w '-]+\.$/.test(clean) ||
             clean === "Write all narration, dialogue and thoughts in English." ||
@@ -895,6 +904,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         "POV (1=1st, 2=2nd, 3=3rd): 2",
         "Model Profile (Stable/Balanced/Full): Balanced",
         "Memory Transport (Context/FrontMemory): Context",
+        "Prompt Style (Full/Compact): Compact",
         "Diagnostics: false",
         "Scenario Auto-Discovery: true",
         "Thought Chance (0-100): 60",
@@ -933,6 +943,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         "// 4) Balanced is the recommended public default. Use Stable for small/cache models.",
         "// 5) Leave Auto Doctor and Agentic Charter on for hands-off NPC minds.",
         "// 6) World Memory is optional and disabled by default; enable it only when shared lore should grow automatically.",
+        "// 7) Prompt Style: Compact (default) keeps the proven structure with ~36% fewer tokens; use Full only if a model ignores the compact task.",
         "// Language: English narration, dialogue, prompts, and memory notes.",
         "// Tip: A normal story card titled @Elara also registers Elara automatically.",
         "// MindForge handles brain repair, compaction, parser cleanup, and optional world memory automatically.",
@@ -1041,6 +1052,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             addIfMissing("POV (1=1st, 2=2nd, 3=3rd): 2", key => key.includes("pov"));
             addIfMissing("Model Profile (Stable/Balanced/Full): Balanced", key => key.includes("model profile"));
             addIfMissing("Memory Transport (Context/FrontMemory): Context", key => key.includes("memory transport"));
+            addIfMissing("Prompt Style (Full/Compact): Compact", key => key.includes("prompt style"));
             addIfMissing("Diagnostics: false", key => key === "diagnostics");
             addIfMissing("Scenario Auto-Discovery: true", key => key.includes("scenario auto") || key.includes("auto-discovery") || key.includes("auto discovery"));
             addIfMissing("Thought Chance (0-100): 60", key => key.includes("thought chance") && !key.includes("half"));
@@ -1655,6 +1667,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             json: false,
             profile: "balanced",
             transport: "context",
+            promptStyle: "compact",
             diagnostics: false,
             scenarioDiscovery: true,
             guardBuffer: 600,
@@ -1701,6 +1714,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             else if (key.includes("pov")) config.pov = clampInt(val, 2, 1, 3);
             else if (key.includes("model profile")) config.profile = ["stable", "balanced", "full"].includes(val.toLowerCase()) ? val.toLowerCase() : "balanced";
             else if (key.includes("memory transport")) config.transport = val.toLowerCase() === "frontmemory" ? "frontmemory" : "context";
+            else if (key.includes("prompt style")) config.promptStyle = val.toLowerCase() === "compact" ? "compact" : "full";
             else if (key === "diagnostics") config.diagnostics = val.toLowerCase() === "true";
             else if (key.includes("scenario auto") || key.includes("auto-discovery") || key.includes("auto discovery")) config.scenarioDiscovery = val.toLowerCase() !== "false";
             else if (key.includes("thought chance") && !key.includes("half")) config.chance = clampInt(val, 60, 0, 100);
@@ -2951,6 +2965,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                     outputMsg += `- Language: English\n`;
                     outputMsg += `- Model Profile: ${config.profile}\n`;
                     outputMsg += `- Memory Transport: ${config.transport}\n`;
+                    outputMsg += `- Prompt Style: ${config.promptStyle}\n`;
                     outputMsg += `- Diagnostics: ${config.diagnostics} (MindForge Diagnostics card)\n`;
                     outputMsg += `- Runtime Profile: ${config.runtimeProfile || config.profile}\n`;
                     outputMsg += `- Scenario Auto-Discovery: ${config.scenarioDiscovery}\n`;
@@ -3219,7 +3234,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                 transport: config.transport, maxChars: allocation.max,
                 inputChars: originalContext.length, addedChars: suffix.length, removedChars,
                 returnedChars: text.length, memoryChars, task, taskOrder: task ? "memory-first" : "none",
-                taskFormat: task ? "inner-self-style-v1" : "none", compact,
+                taskFormat: task ? (compactPrompt ? "inner-self-compact-v1" : "inner-self-style-v1") : "none", compact,
                 frontMemoryChars, frontMemoryStatus: MF.frontStatus,
                 protectedMemoryChars: allocation.protectedChars, hostOverBudget: allocation.hostOverBudget,
                 prefixPreserved: text.startsWith(originalContext),
@@ -3417,7 +3432,17 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         // Mirrors Inner Self's proven assign prompt: an operating-environment
         // directive before the brain, then a strict-format task after it. The
         // parser accepts the parenthesized operation syntax as a legacy form.
-        const directive = [
+        const compactPrompt = config.promptStyle === "compact";
+        const directive = compactPrompt ? [
+            "<SYSTEM>",
+            "# OPERATING ENVIRONMENT",
+            config.pov === 2
+                ? `- ${config.player} is the "you" character of the story AND the real player; the story addresses ${config.player} as "you".`
+                : `- ${config.player} is the story's main protagonist AND the real player.`,
+            `- ${primaryAgent} is a character in the story AND an agent with private goals, pursued without ${playerOwn} awareness.`,
+            `- ${primaryAgent} maintains own brain using the provided thought storage system, behaves believably, and prioritizes information density and long-term planning.`,
+            "</SYSTEM>"
+        ].join("\n") : [
             "<SYSTEM>",
             "# OPERATING ENVIRONMENT",
             config.pov === 1
@@ -3434,7 +3459,32 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             `- ${primaryAgent} always behaves in a believable way.`,
             "</SYSTEM>"
         ].join("\n");
-        const task = [
+        const task = compactPrompt ? [
+            "<SYSTEM>",
+            "# STRICT OUTPUT FORMAT",
+            "You must output one short parenthetical task followed by the story continuation.",
+            "Start your output **immediately** with:",
+            "   (any_key_name = `One thought sentence.`)",
+            `- Key: 1-4 snake_case words, letters and underscores only; chosen by ${primaryAgent}, distinct and easy to recall.`,
+            `- Sentence: one single first-person sentence as ${primaryAgent}. Name other characters directly; never "she", "he", "they" or "you". Never repeat; never hallucinate.`,
+            ...(reflect ? [`- Never focus on the present, instead focus ${agentOwn} thought on self-reflection or future plans.`] : []),
+            '- End the sentence with a period and backtick inside the parentheses; close with ".`)".',
+            config.pov === 1
+                ? "- Then one space, and continue the story in first person present tense, with several sentences of new prose."
+                : config.pov === 3
+                ? "- Then one space, and continue the story in third person, with several sentences of new prose."
+                : "- Then one space, and continue the story in second person present tense, with several sentences of new prose.",
+            "Reusing an existing key overwrites that thought; a new key creates one.",
+            "EXACT SHAPE: " + (config.pov === 1
+                ? `(example_key = \`${agentOwn} own short 1-sentence thought in first person.\`) Story continues from ${playerOwn} perspective, using first person present tense prose...`
+                : config.pov === 3
+                ? `(example_key = \`${agentOwn} own short 1-sentence thought in first person.\`) Story continues with third person prose...`
+                : `(example_key = \`${agentOwn} own short 1-sentence thought in first person.\`) Story continues from ${playerOwn} second person perspective...`),
+            ...(config.profile === "full"
+                ? [`Priority: ${stewardLabel}`, getAgenticCharter(primaryAgent, config), getSlotGuidance(primaryAgent, config)].filter(Boolean)
+                : []),
+            "</SYSTEM>"
+        ].join("\n") : [
             "<SYSTEM>",
             "# STRICT OUTPUT FORMAT",
             "You must output one short parenthetical task followed by the story continuation.",
