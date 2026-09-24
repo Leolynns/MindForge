@@ -360,7 +360,7 @@ function MindForgeParseOutput(raw) {
             /^- Key: 1-4 snake_case words chosen by [\w '-]+, distinct and easy to recall\.$/.test(clean) ||
             /^- Thought: one first-person sentence as [\w '-]+; name other characters directly instead of pronouns; never repeat or invent facts\.$/.test(clean) ||
             /^- Close with "\.`\)"\.$/.test(clean) ||
-            /^- Story: several sentences in (?:first|second|third) person(?: present tense)?\.$/.test(clean) ||
+            /^- Story: several sentences of new prose in (?:first|second|third) person(?: present tense)?\.$/.test(clean) ||
             clean === "Reusing a key overwrites that thought; a new key creates one.") return removeMeta();
         if (/^For [\w '-]+ only, (?:after the story (?:optionally )?append one line\b|start your response with one memory operation:)/.test(clean) ||
             /^Story: (?:first|second|third) person; player [\w '-]+\.$/.test(clean) ||
@@ -3470,10 +3470,10 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             ...(reflect ? [`- Never focus on the present, instead focus ${agentOwn} thought on self-reflection or future plans.`] : []),
             '- Close with ".`)".',
             config.pov === 1
-                ? "- Story: several sentences in first person present tense."
+                ? "- Story: several sentences of new prose in first person present tense."
                 : config.pov === 3
-                ? "- Story: several sentences in third person."
-                : "- Story: several sentences in second person present tense.",
+                ? "- Story: several sentences of new prose in third person."
+                : "- Story: several sentences of new prose in second person present tense.",
             "Reusing a key overwrites that thought; a new key creates one.",
             "EXACT SHAPE: " + (config.pov === 1
                 ? `(example_key = \`${agentOwn} own short first-person thought.\`) Story continues from ${playerOwn} perspective, using first person present tense prose...`
