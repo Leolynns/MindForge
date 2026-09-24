@@ -18,8 +18,10 @@ continues playing normally.
 
 ## What's new
 
-- **Off by default:** prepares the configuration and main NPC name, then waits
-  for the player to set `Enabled: true` before starting NPC memory.
+- **On by default:** new adventures start with NPC memory active — paste the
+  four tabs and it works from the first turn. No card editing or setup answer is
+  required. Type `/mf off` in-game (or set `Enabled: false` in the card) to
+  pause, and `/mf on` to resume.
 - **Direct setup answers:** reads recognized player/main-NPC name questions from
   `state.placeholders`, even after the opening has left recent context.
 - **Host-aware protection:** respects valid `info.memoryLength` boundaries and
@@ -67,29 +69,34 @@ See [CHANGELOG.md](CHANGELOG.md) for the update notes.
    | Output | [src/output.js](src/output.js) |
 
 3. Save all four tabs and start or continue the adventure.
-4. Open the generated **Configure MindForge** Story Card. MindForge starts with
-   **`Enabled: false`**. It can prepare the main NPC name while disabled.
-5. When you want to use NPC memory, change that line to **`Enabled: true`**.
+4. MindForge starts enabled: it prepares its **Configure MindForge** card, picks
+   up the main NPC name, and begins NPC memory from the first turn. No card
+   editing or setup answer is required.
+5. To pause or resume in-game, type `/mf off` or `/mf on`. The card's `Enabled`
+   line works too.
 
-While disabled, MindForge does not inject memories or tasks, write or decay
-brains, or process ordinary story output. Players can leave it off and play
-normally. If it is switched off after a memory task was already sent, that
-pending operation is cleaned once without saving a new memory.
+While disabled (via `/mf off` or `Enabled: false`), MindForge does not inject
+memories or tasks, write or decay brains, or process ordinary story output.
+Players can leave it off and play normally. If it is switched off after a memory
+task was already sent, that pending operation is cleaned once without saving a
+new memory.
 
 ### Optional: ask at adventure start
 
-Add this line at the end of your scenario's setup questions (the `MindForge:`
-prefix makes the line recognizable so MindForge can remove it after use):
+New adventures are enabled by default, so no question is required. If you want
+players to choose, add this line at the end of your scenario's setup questions
+(the `MindForge:` prefix makes the line recognizable so MindForge can remove it
+after use):
 
 ```text
 MindForge: ${Do you want to enable MindForge? (Answer Yes or No — you can change this later in the "Configure MindForge" story card.)}
 ```
 
-MindForge reads the answer once when the adventure starts: **Yes** sets
-`Enabled: true`; any other answer leaves it disabled. The config card stays
-authoritative afterwards, so players can always change it there. After the
-answer is read, MindForge removes the question line — raw or resolved — from
-every Context, so it never consumes play-time space. Questions that do not
+MindForge reads the answer once when the adventure starts: **Yes** keeps it
+enabled; any other answer disables it. The config card stays authoritative
+afterwards, so players can always change it there — or use `/mf on` / `/mf off`.
+After the answer is read, MindForge removes the question line — raw or resolved —
+from every Context, so it never consumes play-time space. Questions that do not
 contain "MindForge" are ignored. The answer is counted as
 `setupEnableAnswers` and shown in `/mf status`.
 
@@ -250,11 +257,13 @@ limit. Stored memories are not deleted just because they do not fit this turn.
 <summary>Default configuration</summary>
 
 ```text
-Enabled: false
+Enabled: true
 Player Name: auto
 POV (1=1st, 2=2nd, 3=3rd): 2
 Model Profile (Stable/Balanced/Full): Balanced
 Memory Transport (Context/FrontMemory): Context
+Prompt Style (Full/Compact): Compact
+Diagnostics: false
 Scenario Auto-Discovery: true
 Thought Chance (0-100): 60
 Half Thought Chance: true
@@ -450,13 +459,14 @@ Use Inspect to check host processing or other scripts that run afterwards.
 ### Updating existing adventures
 
 Replace all four script tabs together. Existing configuration entries remain
-authoritative: an adventure already set to `Enabled: true` stays enabled. New
-configurations, or older ones without an Enabled setting, start disabled. Change
-an existing card to `Enabled: false` if you want to pause its memory system.
-Review old settings if you want the other new defaults. Older brain
-metadata may contain a `chance` or `budget` value inherited from an earlier
-version. Remove that field from the brain card's JSON keys if you want it to
-inherit the current config again; intentional per-NPC overrides can remain.
+authoritative: an adventure already set to `Enabled: true` stays enabled, and an
+explicit `Enabled: false` stays paused. Older cards without an Enabled line keep
+starting disabled; set `Enabled: true` or type `/mf on` when you want them to
+join the new default. Review old settings if you want the other new defaults.
+Older brain metadata may contain a `chance` or `budget` value inherited from an
+earlier version. Remove that field from the brain card's JSON keys if you want
+it to inherit the current config again; intentional per-NPC overrides can
+remain.
 
 ## Optional World Memory and World Cards
 
@@ -566,10 +576,12 @@ that does not establish superior long-term storytelling or retention.
 
 ## Optional commands
 
-Players do not need commands during normal play. When MindForge is enabled,
-these commands are available for inspection or manual edits:
+Players do not need commands during normal play. These commands are available
+at any time:
 
 ```text
+/mf on
+/mf off
 /mf status
 /mf <agent>
 /mf set <agent> <key> <value>
@@ -579,6 +591,7 @@ these commands are available for inspection or manual edits:
 /mf debug [on|off]
 ```
 
+`/mf off` pauses NPC memory and `/mf on` resumes it, even while it is paused.
 Commands work in **Do**, **Say**, and **Story** input modes. The command's
 result replaces that input as the action, and the AI responds to it; use
 **Undo** to remove the exchange from the story. If a command appears in the

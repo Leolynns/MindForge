@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Enabled by default
+
+- New adventures now start with `Enabled: true`. No card editing, no setup
+  answer, and no paste step is required: paste the four tabs and NPC memory
+  works from the first turn.
+- Add `/mf on` and `/mf off` so players can pause or resume in-game, including
+  while MindForge is disabled. The config card's `Enabled` line stays
+  authoritative.
+- The optional `MindForge:` setup question still works as an override: "Yes"
+  keeps it enabled, any other answer disables it once at adventure start, and
+  the question line is removed from Context afterwards.
+- Existing configuration cards are untouched: an explicit `Enabled: false`
+  stays paused, and older cards without the line still start disabled.
+
 ## Unreleased — Compact prompt default
 
 - Add `Prompt Style (Full/Compact)` with **Compact as the default**. Compact

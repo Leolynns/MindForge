@@ -907,7 +907,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         "",
         "Adjust the values below. Keep the colon and space.",
         "",
-        "Enabled: false",
+        "Enabled: true",
         "Player Name: auto",
         "POV (1=1st, 2=2nd, 3=3rd): 2",
         "Model Profile (Stable/Balanced/Full): Balanced",
@@ -943,7 +943,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
     const configGuideText = [
         "// MindForge Quick Guide:",
         "// Public scenario setup:",
-        "// MindForge starts disabled. Set Enabled: true in this card to start NPC memory.",
+        "// MindForge starts enabled. Set Enabled: false in this card, or type /mf off in-game, to pause NPC memory.",
         "// 1) Add important NPC names below, one per line. Use commas for aliases.",
         "// Example: Elara, queen, the queen",
         "// 2) Player Name: auto reads recognized setup answers first, then resolved scenario text.",
@@ -2950,6 +2950,20 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
     if (config.worldCards || storyCards.some(card => card && String(card.description || "").startsWith("// MindForge World Card:"))) syncWorldCards(config);
 
     if (!config.enabled) {
+        if (hook === "input" && typeof text === "string" && MindForgeIsCommand(text)) {
+            const sub = (MindForgeCommandText(text).split(" ")[1] || "").toLowerCase();
+            const configCard = MindForgeConfigCard();
+            if (configCard && (sub === "on" || sub === "off")) {
+                const next = sub === "on";
+                configCard.entry = configCard.entry.replace(/^\s*Enabled\s*:.*$/im, `Enabled: ${next}`);
+                text = next
+                    ? "🧩 [MindForge] Enabled: true.\n\nNPC memory starts on the next turn. Type /mf off to disable it again."
+                    : "🧩 [MindForge] Already disabled.";
+            } else {
+                text = "🧩 [MindForge] Disabled. Type /mf on to enable NPC memory.";
+            }
+            return;
+        }
         const cleanPendingTask = hook === "output" && ((MF.delivery?.task && !MF.delivery.consumed) ||
             (frontLease?.delivered && !frontLease.outputHandled));
         const originalContext = hook === "context" ? stripSetupEnableQuestion(text) : text;
@@ -3176,6 +3190,17 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                             ? `Generate one new turn, then open the "MindForge Diagnostics" card and copy its Notes.\nTurn capture off with /mf debug off when done.`
                             : `Capture disabled. The stored trace clears on the next hook.`;
                     }
+                } else if (sub === "on" || sub === "off") {
+                    const next = sub === "on";
+                    const configCard = MindForgeConfigCard();
+                    if (!configCard) {
+                        outputMsg = `❌ Configuration card not found.`;
+                    } else {
+                        configCard.entry = configCard.entry.replace(/^\s*Enabled\s*:.*$/im, `Enabled: ${next}`);
+                        outputMsg = next
+                            ? `🧩 [MindForge] Enabled: true.`
+                            : `🧩 [MindForge] Enabled: false.\n\nNPC memory is paused; the story continues normally. Type /mf on to resume.`;
+                    }
                 } else if (sub === "help") {
                     outputMsg = `🧩 [MindForge Commands Help]\n\n`;
                     outputMsg += `OOC Commands:\n`;
@@ -3185,6 +3210,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                     outputMsg += `- /mf forget <agent> <key> : Delete memory key.\n`;
                     outputMsg += `- /mf rename <agent> <new_key> <old_key> : Rename memory key.\n`;
                     outputMsg += `- /mf clear <agent> : Clear all memories for agent.\n`;
+                    outputMsg += `- /mf on|off : Enable or pause NPC memory.\n`;
                     outputMsg += `- /mf debug [on|off] : Toggle paired diagnostic capture (MindForge Diagnostics card).\n`;
                     outputMsg += `\n(Type anything and press Submit to resume game.)`;
                 } else {
