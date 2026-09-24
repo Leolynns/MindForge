@@ -22,6 +22,10 @@ continues playing normally.
   four tabs and it works from the first turn. No card editing or setup answer is
   required. Type `/mf off` in-game (or set `Enabled: false` in the card) to
   pause, and `/mf on` to resume.
+- **One-time startup notice:** at adventure start MindForge shows a transient
+  host toast ("MindForge enabled... type /mf off") so players know it is on and
+  how to pause it. Toasts never enter the story or the context. A disabled
+  adventure gets a one-time "type /mf on" toast instead.
 - **Direct setup answers:** reads recognized player/main-NPC name questions from
   `state.placeholders`, even after the opening has left recent context.
 - **Host-aware protection:** respects valid `info.memoryLength` boundaries and
@@ -70,8 +74,9 @@ See [CHANGELOG.md](CHANGELOG.md) for the update notes.
 
 3. Save all four tabs and start or continue the adventure.
 4. MindForge starts enabled: it prepares its **Configure MindForge** card, picks
-   up the main NPC name, and begins NPC memory from the first turn. No card
-   editing or setup answer is required.
+   up the main NPC name, and begins NPC memory from the first turn. A one-time
+   toast tells the player it is on and how to pause it. No card editing or setup
+   answer is required.
 5. To pause or resume in-game, type `/mf off` or `/mf on`. The card's `Enabled`
    line works too.
 

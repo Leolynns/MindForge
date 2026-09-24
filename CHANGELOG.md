@@ -8,6 +8,11 @@
 - Add `/mf on` and `/mf off` so players can pause or resume in-game, including
   while MindForge is disabled. The config card's `Enabled` line stays
   authoritative.
+- Add a one-time adventure-start toast through the host's `state.message` slot:
+  it tells players MindForge is enabled and how to pause it, and it never enters
+  the story or the context. A disabled adventure gets a one-time "type /mf on"
+  toast instead. If another script owns the message slot, MindForge leaves it
+  untouched.
 - The optional `MindForge:` setup question still works as an override: "Yes"
   keeps it enabled, any other answer disables it once at adventure start, and
   the question line is removed from Context afterwards.

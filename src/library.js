@@ -2946,6 +2946,19 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
     // ==================== HOOK ROUTING ====================
 
     let { config } = parseConfig();
+
+    // One-time adventure-start notice delivered as a host toast (state.message).
+    // Toasts are transient UI messages: they never enter the story or the
+    // context, and the host only shows them when the value changes.
+    if (!MF.startupNotice) {
+        MF.startupNotice = true;
+        if (!state.message) {
+            state.message = config.enabled
+                ? "🧩 MindForge enabled. You can disable it from the Configure MindForge story card by setting Enabled: false, or type /mf off. Have fun!"
+                : "🧩 MindForge is off. Type /mf on to enable NPC memory.";
+        }
+    }
+
     // Disabling automation deactivates untouched managed triggers on the next hook.
     if (config.worldCards || storyCards.some(card => card && String(card.description || "").startsWith("// MindForge World Card:"))) syncWorldCards(config);
 
