@@ -352,15 +352,16 @@ function MindForgeParseOutput(raw) {
             /^- [\w '-]+ realistically interacts with various other characters present in the story\.$/.test(clean) ||
             /^- [\w '-]+ prioritizes information density, long-term planning, and important concepts\.$/.test(clean) ||
             /^- [\w '-]+ always behaves in a believable way\.$/.test(clean) ||
-            /^- [\w '-]+ is the "you" character of the story AND the real player; the story addresses [\w '-]+ as "you"\.$/.test(clean) ||
-            /^- [\w '-]+ is the story's main protagonist AND the real player\.$/.test(clean) ||
-            /^- [\w '-]+ is a character in the story AND an agent with private goals, pursued without [\w '-]+'s awareness\.$/.test(clean) ||
-            /^- [\w '-]+ maintains own brain using the provided thought storage system, behaves believably, and prioritizes information density and long-term planning\.$/.test(clean) ||
-            /^- Key: 1-4 snake_case words, letters and underscores only; chosen by [\w '-]+, distinct and easy to recall\.$/.test(clean) ||
-            /^- Sentence: one single first-person sentence as [\w '-]+\. Name other characters directly; never "she", "he", "they" or "you"\. Never repeat; never hallucinate\.$/.test(clean) ||
-            /^- End the sentence with a period and backtick inside the parentheses; close with/.test(clean) ||
-            /^- Then one space, and continue the story in (?:first|second|third) person(?: present tense)?, with several sentences of new prose\.$/.test(clean) ||
-            clean === "Reusing an existing key overwrites that thought; a new key creates one.") return removeMeta();
+            /^- [\w '-]+ is the real player; the story addresses [\w '-]+ as "you"\.$/.test(clean) ||
+            /^- [\w '-]+ is the real player\.$/.test(clean) ||
+            /^- [\w '-]+ is a character AND an agent with private goals, pursued without [\w '-]+'s awareness\.$/.test(clean) ||
+            /^- [\w '-]+ maintains own brain and behaves believably\.$/.test(clean) ||
+            clean === "Start your output immediately with one memory operation, then one space and the story:" ||
+            /^- Key: 1-4 snake_case words chosen by [\w '-]+, distinct and easy to recall\.$/.test(clean) ||
+            /^- Thought: one first-person sentence as [\w '-]+; name other characters directly instead of pronouns; never repeat or invent facts\.$/.test(clean) ||
+            /^- Close with "\.`\)"\.$/.test(clean) ||
+            /^- Story: several sentences in (?:first|second|third) person(?: present tense)?\.$/.test(clean) ||
+            clean === "Reusing a key overwrites that thought; a new key creates one.") return removeMeta();
         if (/^For [\w '-]+ only, (?:after the story (?:optionally )?append one line\b|start your response with one memory operation:)/.test(clean) ||
             /^Story: (?:first|second|third) person; player [\w '-]+\.$/.test(clean) ||
             clean === "Write all narration, dialogue and thoughts in English." ||
@@ -3437,10 +3438,10 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             "<SYSTEM>",
             "# OPERATING ENVIRONMENT",
             config.pov === 2
-                ? `- ${config.player} is the "you" character of the story AND the real player; the story addresses ${config.player} as "you".`
-                : `- ${config.player} is the story's main protagonist AND the real player.`,
-            `- ${primaryAgent} is a character in the story AND an agent with private goals, pursued without ${playerOwn} awareness.`,
-            `- ${primaryAgent} maintains own brain using the provided thought storage system, behaves believably, and prioritizes information density and long-term planning.`,
+                ? `- ${config.player} is the real player; the story addresses ${config.player} as "you".`
+                : `- ${config.player} is the real player.`,
+            `- ${primaryAgent} is a character AND an agent with private goals, pursued without ${playerOwn} awareness.`,
+            `- ${primaryAgent} maintains own brain and behaves believably.`,
             "</SYSTEM>"
         ].join("\n") : [
             "<SYSTEM>",
@@ -3462,24 +3463,23 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         const task = compactPrompt ? [
             "<SYSTEM>",
             "# STRICT OUTPUT FORMAT",
-            "You must output one short parenthetical task followed by the story continuation.",
-            "Start your output **immediately** with:",
+            "Start your output immediately with one memory operation, then one space and the story:",
             "   (any_key_name = `One thought sentence.`)",
-            `- Key: 1-4 snake_case words, letters and underscores only; chosen by ${primaryAgent}, distinct and easy to recall.`,
-            `- Sentence: one single first-person sentence as ${primaryAgent}. Name other characters directly; never "she", "he", "they" or "you". Never repeat; never hallucinate.`,
+            `- Key: 1-4 snake_case words chosen by ${primaryAgent}, distinct and easy to recall.`,
+            `- Thought: one first-person sentence as ${primaryAgent}; name other characters directly instead of pronouns; never repeat or invent facts.`,
             ...(reflect ? [`- Never focus on the present, instead focus ${agentOwn} thought on self-reflection or future plans.`] : []),
-            '- End the sentence with a period and backtick inside the parentheses; close with ".`)".',
+            '- Close with ".`)".',
             config.pov === 1
-                ? "- Then one space, and continue the story in first person present tense, with several sentences of new prose."
+                ? "- Story: several sentences in first person present tense."
                 : config.pov === 3
-                ? "- Then one space, and continue the story in third person, with several sentences of new prose."
-                : "- Then one space, and continue the story in second person present tense, with several sentences of new prose.",
-            "Reusing an existing key overwrites that thought; a new key creates one.",
+                ? "- Story: several sentences in third person."
+                : "- Story: several sentences in second person present tense.",
+            "Reusing a key overwrites that thought; a new key creates one.",
             "EXACT SHAPE: " + (config.pov === 1
-                ? `(example_key = \`${agentOwn} own short 1-sentence thought in first person.\`) Story continues from ${playerOwn} perspective, using first person present tense prose...`
+                ? `(example_key = \`${agentOwn} own short first-person thought.\`) Story continues from ${playerOwn} perspective, using first person present tense prose...`
                 : config.pov === 3
-                ? `(example_key = \`${agentOwn} own short 1-sentence thought in first person.\`) Story continues with third person prose...`
-                : `(example_key = \`${agentOwn} own short 1-sentence thought in first person.\`) Story continues from ${playerOwn} second person perspective...`),
+                ? `(example_key = \`${agentOwn} own short first-person thought.\`) Story continues with third person prose...`
+                : `(example_key = \`${agentOwn} own short first-person thought.\`) Story continues from ${playerOwn} second person perspective...`),
             ...(config.profile === "full"
                 ? [`Priority: ${stewardLabel}`, getAgenticCharter(primaryAgent, config), getSlotGuidance(primaryAgent, config)].filter(Boolean)
                 : []),

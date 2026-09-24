@@ -4,9 +4,11 @@
 
 - Add `Prompt Style (Full/Compact)` with **Compact as the default**. Compact
   keeps the proven Inner Self structure — operating-environment directive,
-  strict-format task, exact-shape example, parenthesized operation — with
-  condensed wording: 286 vs 461 added tokens on an empty brain (-38%), and
-  332/330 vs 507/508 tokens in the matched three-memory fixture (-36%).
+  strict-format task, exact-shape example, parenthesized operation — with the
+  wording minimized to the essential rules. Measured with the model's own
+  `deepseek-ai/DeepSeek-V4-Flash` tokenizer: 207 vs 477 tokens for the prompt
+  alone (-57%). In the matched three-memory fixture: 248/247 vs 521/522
+  reference tokens for KV (-52%), and 1,108 vs 2,320 added characters (-52%).
 - Full keeps Inner Self's verbatim text as an opt-in fallback; tests cover both
   styles, including echo-stripping of every compact line.
 - The parenthesized syntax, storage, labels, and quality gates are unchanged.

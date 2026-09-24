@@ -26,12 +26,14 @@ continues playing normally.
   avoids empty Input/Output returns that the host rejects.
 - **Optional FrontMemory experiment:** can stage existing primary-NPC memories
   in the host's shared memory field, with delivery checks and automatic cleanup.
-- **~36% cheaper than Inner Self with the same prompt structure:** the default
+- **~52% cheaper than Inner Self with the same prompt structure:** the default
   **Compact** prompt style keeps the operating-environment directive, the
   strict-format task, and the parenthesized `(key = \`thought\`)` operation with
-  condensed wording. The matched three-memory fixture costs 1,492 added
-  characters and 332/330 reference tokens (Inner Self: 2,319 / 524/526).
-  **Full** style is available in the config as an opt-in fallback.
+  the wording minimized to the essential rules. The matched three-memory fixture
+  costs 1,108 added characters and 248/247 reference tokens (Inner Self: 2,319 /
+  524/526); with the model's own DeepSeek-V4-Flash tokenizer the prompt measures
+  207 vs 477 tokens (-57%). **Full** style is available in the config as an
+  opt-in fallback.
 - **Compact passive turns:** 247 characters for the same three memories. Read-only
   turns keep complete thoughts and their owner while omitting editing syntax.
 - **Memory before prose on write turns:** the model is asked to begin with one
@@ -472,13 +474,13 @@ Same 1,000-character host input, three stored memories, and a memory-update task
 
 | Script / mode | Extra context characters | Memories retained |
 |---|---:|---:|
-| **MindForge — standard or cache** | **1,492** | **3/3** |
+| **MindForge — standard or cache** | **1,108** | **3/3** |
 | [Inner Self — standard](https://github.com/LewdLeah/Inner-Self) | 2,319 | 3/3 |
 | [KV Inner Self — cache](https://github.com/Zoocata1/KV-Inner-Self) | 2,320 | 3/3 |
 | [Optimized Context Inner Self — standard](https://github.com/XloSky/Optimized-Context-Inner-Self) | 2,048 | 3/3 |
 | Optimized Context Inner Self — cache | 1 in context + 1,988 in a task card | 3/3 in the card |
 
-MindForge adds about **36% fewer characters than original / KV Inner Self** in
+MindForge adds about **52% fewer characters than original / KV Inner Self** in
 this fixture while using the same proven prompt structure. Task-card text is not
 free context; same-turn host selection of that card is not assumed.
 
@@ -490,7 +492,7 @@ below measure added or reformatted text, separately from any removed host text.
 
 | Fixture / script | `cl100k_base` | `o200k_base` |
 |---|---:|---:|
-| **Active — MindForge** | **332** | **330** |
+| **Active — MindForge** | **248** | **247** |
 | Active — original Inner Self, standard | 524 | 526 |
 | Active — KV Inner Self, cache | 521 | 522 |
 | **Passive — MindForge** | **52** | **51** |
@@ -499,9 +501,12 @@ below measure added or reformatted text, separately from any removed host text.
 
 The passive fixture retains the same three thoughts in **247 characters**,
 versus 318–320 in original / KV Inner Self. Compared with KV, the added-text token
-reduction is approximately **36% active** and **34–35% passive** on these
-encodings. The original standard-path rows also remove/reformat 5 and 6 input
-tokens respectively; whole-prompt deltas are not the same as added-text cost.
+reduction is approximately **52% active** and **34–35% passive** on these
+encodings. Measured with the model's own `deepseek-ai/DeepSeek-V4-Flash`
+tokenizer, the active prompt alone is **207 vs 477 tokens (-57%)** for the same
+proven structure. The original standard-path rows also remove/reformat 5 and 6
+input tokens respectively; whole-prompt deltas are not the same as added-text
+cost.
 
 ### Output handling
 
@@ -530,8 +535,7 @@ that does not establish superior long-term storytelling or retention.
 - Three seeds: 1, 17, 42. Ten context cases in standard/cache modes.
 - Active measurements use the default Compact prompt style. Earlier 768-,
   901-, 1,399-, 1,569-, and 2,301-character figures described other prompt
-  revisions and are superseded.
-- Shared active settings: 100% thought chance, 30% allocation, five-action
+  revisions and are superseded.- Shared active settings: 100% thought chance, 30% allocation, five-action
   lookback, second-person POV. MindForge profile: Balanced; transport: Context.
 - Passive cases disable bootstrap and set thought chance to zero.
 - Optional world generation and Auto-Cards disabled; NGO/SAE bundles excluded.
