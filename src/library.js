@@ -354,13 +354,13 @@ function MindForgeParseOutput(raw) {
             /^- [\w '-]+ always behaves in a believable way\.$/.test(clean) ||
             /^- [\w '-]+ is the real player; the story addresses [\w '-]+ as "you"\.$/.test(clean) ||
             /^- [\w '-]+ is the real player\.$/.test(clean) ||
-            /^- [\w '-]+ is a character AND an agent with private goals, pursued without [\w '-]+'s awareness\.$/.test(clean) ||
-            /^- [\w '-]+ maintains own brain and behaves believably\.$/.test(clean) ||
+            /^- [\w '-]+ is a character in the story AND an agent with private goals, pursued without [\w '-]+'s awareness\.$/.test(clean) ||
+            /^- [\w '-]+ maintains own brain, prioritizes information density and long-term planning, interacts realistically with others, and behaves believably\.$/.test(clean) ||
             clean === "Start your output immediately with one memory operation, then one space and the story:" ||
-            /^- Key: 1-4 snake_case words chosen by [\w '-]+, distinct and easy to recall\.$/.test(clean) ||
-            /^- Thought: one first-person sentence as [\w '-]+; name other characters directly instead of pronouns; never repeat or invent facts\.$/.test(clean) ||
+            /^- Key: 1-4 snake_case words chosen by [\w '-]+, distinct, specific and easy to recall\.$/.test(clean) ||
+            /^- Thought: one first-person sentence as [\w '-]+; name other characters directly instead of pronouns; never repeat or invent facts; novelty and uniqueness are top priorities\.$/.test(clean) ||
             /^- Close with "\.`\)"\.$/.test(clean) ||
-            /^- Story: several sentences of new prose in (?:first|second|third) person(?: present tense)?\.$/.test(clean) ||
+            /^- Story: continue where the story left off, several sentences of new prose in (?:first|second|third) person(?: present tense)?\.$/.test(clean) ||
             clean === "Reusing a key overwrites that thought; a new key creates one.") return removeMeta();
         if (/^For [\w '-]+ only, (?:after the story (?:optionally )?append one line\b|start your response with one memory operation:)/.test(clean) ||
             /^Story: (?:first|second|third) person; player [\w '-]+\.$/.test(clean) ||
@@ -1753,6 +1753,24 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         }
         config.player = resolvePlayerName(config.player);
 
+        // A recognized scenario setup answer decides the initial opt-in exactly
+        // once: "Yes" enables MindForge, anything else leaves it disabled. Later
+        // manual changes in the config card are never overridden again.
+        if (!MF.setupEnableApplied && Array.isArray(state.placeholders)) {
+            for (const item of state.placeholders.slice(0, 100)) {
+                if (!item || typeof item.question !== "string" || typeof item.answer !== "string") continue;
+                if (!/mindforge/i.test(item.question)) continue;
+                MF.setupEnableApplied = true;
+                const enabled = /^\s*yes\b/i.test(item.answer);
+                config.enabled = enabled;
+                if (typeof card.entry === "string") {
+                    card.entry = card.entry.replace(/^\s*Enabled\s*:.*$/im, `Enabled: ${enabled}`);
+                }
+                bumpHealth("setupEnableAnswers");
+                break;
+            }
+        }
+
         if (config.profile === "stable") {
             config.chance = Math.min(config.chance, 35);
             config.contextPct = Math.min(config.contextPct, 14);
@@ -3005,6 +3023,7 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
                     outputMsg += `- Auto Doctor Compacts: ${MF.health.autoDoctorCompacts || 0}\n`;
                     outputMsg += `- Bootstrap Prompts: ${MF.health.bootstrapPrompts || 0}\n`;
                     outputMsg += `- Unfilled Tasks: ${MF.health.unfilledTasks || 0}\n`;
+                    outputMsg += `- Setup Opt-ins: ${MF.health.setupEnableAnswers || 0}\n`;
                     outputMsg += `- Scenario Discoveries: ${MF.health.scenarioDiscoveries || 0}\n`;
                     outputMsg += `- World Writes: ${MF.health.worldWrites || 0}\n`;
                     outputMsg += `- World Compacts: ${MF.health.worldCompacts || 0}\n`;
@@ -3440,8 +3459,8 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             config.pov === 2
                 ? `- ${config.player} is the real player; the story addresses ${config.player} as "you".`
                 : `- ${config.player} is the real player.`,
-            `- ${primaryAgent} is a character AND an agent with private goals, pursued without ${playerOwn} awareness.`,
-            `- ${primaryAgent} maintains own brain and behaves believably.`,
+            `- ${primaryAgent} is a character in the story AND an agent with private goals, pursued without ${playerOwn} awareness.`,
+            `- ${primaryAgent} maintains own brain, prioritizes information density and long-term planning, interacts realistically with others, and behaves believably.`,
             "</SYSTEM>"
         ].join("\n") : [
             "<SYSTEM>",
@@ -3465,15 +3484,15 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
             "# STRICT OUTPUT FORMAT",
             "Start your output immediately with one memory operation, then one space and the story:",
             "   (any_key_name = `One thought sentence.`)",
-            `- Key: 1-4 snake_case words chosen by ${primaryAgent}, distinct and easy to recall.`,
-            `- Thought: one first-person sentence as ${primaryAgent}; name other characters directly instead of pronouns; never repeat or invent facts.`,
+            `- Key: 1-4 snake_case words chosen by ${primaryAgent}, distinct, specific and easy to recall.`,
+            `- Thought: one first-person sentence as ${primaryAgent}; name other characters directly instead of pronouns; never repeat or invent facts; novelty and uniqueness are top priorities.`,
             ...(reflect ? [`- Never focus on the present, instead focus ${agentOwn} thought on self-reflection or future plans.`] : []),
             '- Close with ".`)".',
             config.pov === 1
-                ? "- Story: several sentences of new prose in first person present tense."
+                ? "- Story: continue where the story left off, several sentences of new prose in first person present tense."
                 : config.pov === 3
-                ? "- Story: several sentences of new prose in third person."
-                : "- Story: several sentences of new prose in second person present tense.",
+                ? "- Story: continue where the story left off, several sentences of new prose in third person."
+                : "- Story: continue where the story left off, several sentences of new prose in second person present tense.",
             "Reusing a key overwrites that thought; a new key creates one.",
             "EXACT SHAPE: " + (config.pov === 1
                 ? `(example_key = \`${agentOwn} own short first-person thought.\`) Story continues from ${playerOwn} perspective, using first person present tense prose...`

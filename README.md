@@ -26,14 +26,14 @@ continues playing normally.
   avoids empty Input/Output returns that the host rejects.
 - **Optional FrontMemory experiment:** can stage existing primary-NPC memories
   in the host's shared memory field, with delivery checks and automatic cleanup.
-- **~52% cheaper than Inner Self with the same prompt structure:** the default
+- **~49% cheaper than Inner Self with the same prompt structure:** the default
   **Compact** prompt style keeps the operating-environment directive, the
   strict-format task, and the parenthesized `(key = \`thought\`)` operation with
-  the wording minimized to the essential rules. The matched three-memory fixture
-  costs 1,108 added characters and 248/247 reference tokens (Inner Self: 2,319 /
-  524/526); with the model's own DeepSeek-V4-Flash tokenizer the prompt measures
-  207 vs 477 tokens (-57%). **Full** style is available in the config as an
-  opt-in fallback.
+  the wording minimized but every rule retained. With the model's own
+  DeepSeek-V4-Flash tokenizer the prompt measures 244 vs 477 tokens (-49%); the
+  matched three-memory fixture costs 1,316 added characters and 285/284
+  reference tokens (Inner Self: 2,319 / 524/526). **Full** style is available in
+  the config as an opt-in fallback.
 - **Compact passive turns:** 247 characters for the same three memories. Read-only
   turns keep complete thoughts and their owner while omitting editing syntax.
 - **Memory before prose on write turns:** the model is asked to begin with one
@@ -75,6 +75,20 @@ While disabled, MindForge does not inject memories or tasks, write or decay
 brains, or process ordinary story output. Players can leave it off and play
 normally. If it is switched off after a memory task was already sent, that
 pending operation is cleaned once without saving a new memory.
+
+### Optional: ask at adventure start
+
+Add this placeholder question at the end of your scenario's setup questions:
+
+```text
+${Do you want to enable MindForge? (Answer Yes or No — you can change this later in the "Configure MindForge" story card.)}
+```
+
+MindForge reads the answer once when the adventure starts: **Yes** sets
+`Enabled: true`; any other answer leaves it disabled. The config card stays
+authoritative afterwards, so players can always change it there. Questions that
+do not contain "MindForge" are ignored. The answer is counted as
+`setupEnableAnswers` and shown in `/mf status`.
 
 Use GitHub's **Raw** button when copying a file. All four tabs should come from
 the same version. No package installation, API key, or external service is
@@ -474,15 +488,15 @@ Same 1,000-character host input, three stored memories, and a memory-update task
 
 | Script / mode | Extra context characters | Memories retained |
 |---|---:|---:|
-| **MindForge — standard or cache** | **1,108** | **3/3** |
+| **MindForge — standard or cache** | **1,316** | **3/3** |
 | [Inner Self — standard](https://github.com/LewdLeah/Inner-Self) | 2,319 | 3/3 |
 | [KV Inner Self — cache](https://github.com/Zoocata1/KV-Inner-Self) | 2,320 | 3/3 |
 | [Optimized Context Inner Self — standard](https://github.com/XloSky/Optimized-Context-Inner-Self) | 2,048 | 3/3 |
 | Optimized Context Inner Self — cache | 1 in context + 1,988 in a task card | 3/3 in the card |
 
-MindForge adds about **52% fewer characters than original / KV Inner Self** in
-this fixture while using the same proven prompt structure. Task-card text is not
-free context; same-turn host selection of that card is not assumed.
+MindForge adds about **43% fewer characters than original / KV Inner Self** in
+this fixture while using the same proven prompt structure and rules. Task-card
+text is not free context; same-turn host selection of that card is not assumed.
 
 ### Reference token counts
 
@@ -492,7 +506,7 @@ below measure added or reformatted text, separately from any removed host text.
 
 | Fixture / script | `cl100k_base` | `o200k_base` |
 |---|---:|---:|
-| **Active — MindForge** | **248** | **247** |
+| **Active — MindForge** | **285** | **284** |
 | Active — original Inner Self, standard | 524 | 526 |
 | Active — KV Inner Self, cache | 521 | 522 |
 | **Passive — MindForge** | **52** | **51** |
@@ -501,12 +515,12 @@ below measure added or reformatted text, separately from any removed host text.
 
 The passive fixture retains the same three thoughts in **247 characters**,
 versus 318–320 in original / KV Inner Self. Compared with KV, the added-text token
-reduction is approximately **52% active** and **34–35% passive** on these
+reduction is approximately **45% active** and **34–35% passive** on these
 encodings. Measured with the model's own `deepseek-ai/DeepSeek-V4-Flash`
-tokenizer, the active prompt alone is **207 vs 477 tokens (-57%)** for the same
-proven structure. The original standard-path rows also remove/reformat 5 and 6
-input tokens respectively; whole-prompt deltas are not the same as added-text
-cost.
+tokenizer, the active prompt alone is **244 vs 477 tokens (-49%)** for the same
+proven structure and rules. The original standard-path rows also remove/reformat
+5 and 6 input tokens respectively; whole-prompt deltas are not the same as
+added-text cost.
 
 ### Output handling
 
