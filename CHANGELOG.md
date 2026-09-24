@@ -13,8 +13,9 @@
 - Add a scenario setup answer for the initial opt-in: a placeholder question
   containing "MindForge" decides `Enabled` once at adventure start — "Yes"
   enables it, any other answer leaves it disabled. Later manual changes in the
-  config card are never overridden. Counted as `setupEnableAnswers` and shown
-  in `/mf status`.
+  config card are never overridden. The question line (raw or resolved) is
+  removed from every Context afterwards so it never consumes play-time space.
+  Counted as `setupEnableAnswers` and shown in `/mf status`.
 - Full keeps Inner Self's verbatim text as an opt-in fallback; tests cover both
   styles, including echo-stripping of every compact line.
 - The parenthesized syntax, storage, labels, and quality gates are unchanged.

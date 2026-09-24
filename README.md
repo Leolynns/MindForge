@@ -78,16 +78,19 @@ pending operation is cleaned once without saving a new memory.
 
 ### Optional: ask at adventure start
 
-Add this placeholder question at the end of your scenario's setup questions:
+Add this line at the end of your scenario's setup questions (the `MindForge:`
+prefix makes the line recognizable so MindForge can remove it after use):
 
 ```text
-${Do you want to enable MindForge? (Answer Yes or No — you can change this later in the "Configure MindForge" story card.)}
+MindForge: ${Do you want to enable MindForge? (Answer Yes or No — you can change this later in the "Configure MindForge" story card.)}
 ```
 
 MindForge reads the answer once when the adventure starts: **Yes** sets
 `Enabled: true`; any other answer leaves it disabled. The config card stays
-authoritative afterwards, so players can always change it there. Questions that
-do not contain "MindForge" are ignored. The answer is counted as
+authoritative afterwards, so players can always change it there. After the
+answer is read, MindForge removes the question line — raw or resolved — from
+every Context, so it never consumes play-time space. Questions that do not
+contain "MindForge" are ignored. The answer is counted as
 `setupEnableAnswers` and shown in `/mf status`.
 
 Use GitHub's **Raw** button when copying a file. All four tabs should come from

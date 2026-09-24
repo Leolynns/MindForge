@@ -679,6 +679,13 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
         return [...new Set(sources.filter(Boolean))].join("\n").slice(0, 16000);
     };
     const stripSetupPlaceholders = (value = "") => String(value || "").replace(/\$\{[^}]*\}/g, "");
+    // The one-time opt-in question has served its purpose once its answer is
+    // read; keep both the raw placeholder and the resolved answer line out of
+    // every model context so it never wastes play-time space.
+    const stripSetupEnableQuestion = (source) => String(source || "")
+        .split("\n")
+        .filter(line => !/\$\{[^}]*mindforge[^}]*\}/i.test(line) && !/^\s*MindForge\s*:.*$/i.test(line))
+        .join("\n");
     const removeBlockClosingBrace = (line = "") => {
         const noPlaceholders = stripSetupPlaceholders(line);
         if (!/\}\s*$/.test(noPlaceholders)) return line;
@@ -2945,7 +2952,8 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
     if (!config.enabled) {
         const cleanPendingTask = hook === "output" && ((MF.delivery?.task && !MF.delivery.consumed) ||
             (frontLease?.delivered && !frontLease.outputHandled));
-        const originalContext = text;
+        const originalContext = hook === "context" ? stripSetupEnableQuestion(text) : text;
+        text = originalContext;
         const owned = hook === "context" ? MindForgeFrontRange(text, frontLease) : null;
         if (owned) text = removeOwnedFront(owned);
         if (frontLease && hook !== "output") frontLease.delivered = false;
@@ -3205,7 +3213,8 @@ function MindForgeCore(hook, parsedOutput, frontLease, sharedFront) {
 
     // 2. CONTEXT HOOK: Multi-NPC thoughts injection and decay
     if (hook === "context") {
-        const originalContext = text;
+        const originalContext = stripSetupEnableQuestion(text);
+        text = originalContext;
         const cacheMode = info.useCacheEfficient === true;
         const routed = detectTriggers(config).filter(name => getAgentMeta(name, config).enabled);
         const expectedPrimary = MF.scene.ttl > 0 && routed.includes(MF.scene.agent) ? MF.scene.agent : routed[0];
