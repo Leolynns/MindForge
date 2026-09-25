@@ -246,8 +246,9 @@ function MindForgeParseOutput(raw) {
         .replace(/<!--mf-front:[a-f0-9]+-->[\s\S]*$/g, removeMeta)
         .replace(/<!--\/?mf-front:[a-f0-9]+-->/g, removeMeta)
         .replace(/<(system|think|analysis|reasoning)\b[^>]*>[\s\S]*?<\/\1[ \t]*(?:>|(?=\r?\n|$))/gi, removeMeta)
-        .replace(/<(?:system|think|analysis|reasoning)\b[^>]*>[\s\S]*$/gi, removeMeta)
-        .replace(/<\/(?:system|think|analysis|reasoning)[ \t]*>?/gi, removeMeta)
+        .replace(/<(?:think|analysis|reasoning)\b[^>]*>[\s\S]*$/gi, removeMeta)
+        .replace(/<\/?system\b[^>]*>/gi, removeMeta)
+        .replace(/<\/(?:think|analysis|reasoning)[ \t]*>?/gi, removeMeta)
         .replace(/<\|im_start\|>(?:system|developer|user)\b[^\n]*\n[\s\S]*?(?:<\|im_end\|>|$)/gi, removeMeta)
         .replace(/<\|im_start\|>assistant\b[^\n]*\n?/gi, removeMeta)
         .replace(/<\|start_header_id\|>assistant<\|end_header_id\|>/gi, removeMeta)
@@ -272,6 +273,8 @@ function MindForgeParseOutput(raw) {
         }
         if (brainBlock && (!clean || /^-\s+\S/.test(clean))) return removeMeta();
         brainBlock = false;
+        // Lone bullet lines are memory-block formatting, never story prose.
+        if (/^[-•]\s+\S/.test(clean)) return removeMeta();
         // Recognize partial echoes of our memory task even without its tags.
         if (/^# MindForge Thought Forge: [\w '-]+$/.test(clean) ||
             /^Start output immediately with exactly one hidden memory operation, then one space, then story prose in (?:first-person POV \(as [\w '-]+\)|third-person POV|second-person \('you'\) POV)\.$/.test(clean) ||
@@ -396,9 +399,12 @@ function MindForgeParseOutput(raw) {
     // A prompt echo can also arrive appended to the end of a prose line or
     // after a trailing operation; strip it while keeping the text before it.
     const tailEcho = /([.!?"'’”)\]}]\s+)(?:[-*>#]{1,6}\s*)?(?:(?:EXACT SHAPE: )?\(\s*(?:example_key|any_key_name|specific_key)\s*=\s*[^)\n]*\)\s*)?(?:the\s+)?story continues\b[^\n]*?\b(?:perspective|prose|person)\b[^\n]*?(?:\.{2,}|…)?[ \t]*$/i;
-    if (tailEcho.test(source)) {
-        source = source.replace(tailEcho, "$1");
-        result.scaffolding++;
+    const tailRule = /([.!?"'’”)\]}]\s+)(?:[-*>#]{1,6}\s*)?(?:Story: (?:first|second|third) person; player [^\n.]{1,80}\.|Write all narration, dialogue and thoughts in English\.)[ \t]*$/i;
+    for (const pattern of [tailEcho, tailRule]) {
+        if (pattern.test(source)) {
+            source = source.replace(pattern, "$1");
+            result.scaffolding++;
+        }
     }
 
     const keyPattern = "[A-Za-z_][A-Za-z0-9_]*(?:[ \\t]+[A-Za-z_][A-Za-z0-9_]*){0,3}(?:\\(\\d{1,3}\\))?";

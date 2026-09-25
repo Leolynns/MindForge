@@ -7,6 +7,17 @@
   markdown headers, the "The story continues ... new prose" line, and echoes
   appended directly to the end of a prose line. The bare "Story continues..."
   line was already removed; every named variant now is too.
+- Strip trailing `Story: <pov> person; player <name>.` and English-rule lines
+  when they arrive appended to the end of a prose line.
+- Treat lone `- key: value` / `- sentence` bullet lines as memory-block
+  formatting: they no longer leak into visible output, and they can no longer
+  be misread as a delete/write operation.
+- A stray `<SYSTEM>` tag no longer swallows the prose after it; only the tag is
+  removed, and the line-level echo rules clean whatever follows.
+- Add `npm run audit:echo`: generates 57 prompt variants across styles, POVs,
+  profiles, read-only/world/cache turns and unusual names, then feeds every
+  appended prompt line back through the Output parser. Currently 943 lines,
+  zero leaks.
 
 ## Unreleased — Enabled by default
 
