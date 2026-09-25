@@ -377,6 +377,8 @@ function MindForgeParseOutput(raw) {
         if (result.ui && /^waitingforinput$/.test(line.replace(/[^A-Za-z]/g, "").toLowerCase())) return removeMeta();
         if (/^\s*(?:<<\s*)?(?:[⏳✅⚠️]+\s*)?(?:Generating|Updating)\s+(?:Story Arc|NPC (?:brain|memory))\b/i.test(line)) return removeMeta();
         if (/^\s*(?:#{1,6}\s*)?(?:STRICT OUTPUT FORMAT|Story continues\.{3}|```)[ \t]*$/i.test(line) ||
+            /^\s*(?:[-*>#]{1,6}\s*)?(?:(?:EXACT SHAPE: )?\(\s*(?:example_key|any_key_name|specific_key)\s*=\s*[^)\n]*\)\s*)?(?:the\s+)?story continues\b[^\n]*?\b(?:perspective|prose|person)\b[^\n]*?(?:\.{2,}|…)?[ \t]*$/i.test(line) ||
+            /^\s*(?:EXACT SHAPE: )?\(\s*(?:example_key|any_key_name|specific_key)\s*=\s*`[^`\n]*`\s*\)[ \t]*$/i.test(line) ||
             /^\s*(?:#{1,6}\s*)?(?:MindForge Thought Forge|MindForge NPC|strict output|output format|bracket operation|system instruction|configure mindforge)\b/i.test(line)) {
             technical = true;
             return removeMeta();
@@ -390,6 +392,14 @@ function MindForgeParseOutput(raw) {
         if (clean) technical = false;
         return line;
     }).join("\n");
+
+    // A prompt echo can also arrive appended to the end of a prose line or
+    // after a trailing operation; strip it while keeping the text before it.
+    const tailEcho = /([.!?"'’”)\]}]\s+)(?:[-*>#]{1,6}\s*)?(?:(?:EXACT SHAPE: )?\(\s*(?:example_key|any_key_name|specific_key)\s*=\s*[^)\n]*\)\s*)?(?:the\s+)?story continues\b[^\n]*?\b(?:perspective|prose|person)\b[^\n]*?(?:\.{2,}|…)?[ \t]*$/i;
+    if (tailEcho.test(source)) {
+        source = source.replace(tailEcho, "$1");
+        result.scaffolding++;
+    }
 
     const keyPattern = "[A-Za-z_][A-Za-z0-9_]*(?:[ \\t]+[A-Za-z_][A-Za-z0-9_]*){0,3}(?:\\(\\d{1,3}\\))?";
     const signedHeader = new RegExp(`^([+=-])[ \\t]*(${keyPattern})[ \\t]*(?:([:=])[ \\t]*|(?=[\\])}\\r\\n]|$))`);

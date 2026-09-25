@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Prompt echo cleanup
+
+- Strip longer leaked task closings such as "Story continues from <player>'s
+  second person perspective...", including the `(example_key = ...)` prefix,
+  markdown headers, the "The story continues ... new prose" line, and echoes
+  appended directly to the end of a prose line. The bare "Story continues..."
+  line was already removed; every named variant now is too.
+
 ## Unreleased — Enabled by default
 
 - New adventures now start with `Enabled: true`. No card editing, no setup
